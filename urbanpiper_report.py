@@ -143,14 +143,15 @@ def login_and_get_cookies():
             page.screenshot(path="login_step3_pwd_visible.png")
             page.locator("input[type=password]").first.fill(config.UP_PASSWORD)
 
-            # Submit password — use expect_navigation BEFORE click so we
-            # never miss the redirect event (avoids already-fired race condition)
-            with page.expect_navigation(
-                url="*atlas.urbanpiper.com*",
-                wait_until="commit",
-                timeout=30000
-            ):
-                page.locator("button[type=submit], input[type=submit]").first.click()
+            # Submit password then poll window.location via JS.
+            # expect_navigation / wait_for_url both fail on 3-hop redirects;
+            # wait_for_function checks the URL directly — always reliable.
+            page.locator("button[type=submit], input[type=submit]").first.click()
+            page.wait_for_function(
+                "window.location.hostname === 'atlas.urbanpiper.com' "
+                "&& window.location.pathname !== '/login'",
+                timeout=45000
+            )
             page.screenshot(path="login_step4_success.png")
             log.info("Login successful! URL: {}".format(page.url))
 
