@@ -148,7 +148,7 @@ def login_and_get_cookies():
             log.info("Submitted password. Waiting for Atlas...")
 
             # Wait for redirect back to atlas.urbanpiper.com
-            page.wait_for_url("*atlas.urbanpiper.com*", timeout=30000)
+            page.wait_for_url("*atlas.urbanpiper.com*", timeout=30000, wait_until="commit")
             page.screenshot(path="login_step4_success.png")
             log.info("Login successful! URL: {}".format(page.url))
 
