@@ -112,25 +112,23 @@ def login_and_get_cookies():
         page = context.new_page()
 
         try:
-            # Navigate to Atlas — JS redirect happens to login.urbanpiper.com
-            page.goto(config.ATLAS_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+            # Navigate to Atlas — it JS-redirects to login.urbanpiper.com
+            # Use "commit" so goto returns as soon as the first bytes arrive,
+            # then we wait directly for the email input (works across redirects).
+            page.goto(config.ATLAS_LOGIN_URL, wait_until="commit", timeout=30000)
             log.info("Initial URL: {}".format(page.url))
 
-            # Wait for the redirect to login.urbanpiper.com to complete
-            page.wait_for_url("*login.urbanpiper.com*", timeout=20000)
-            page.wait_for_load_state("domcontentloaded", timeout=15000)
-            log.info("Redirected to: {}".format(page.url))
-            page.screenshot(path="login_step1_loaded.png")
-
             # ── Step 1: Email / Mobile input ──────────────────────────────────
-            # Broad selector — input on this page is type=text, not type=email
+            # Wait for the email field — this naturally waits through the redirect.
+            # Broad selector: the input is type=text (accepts email OR mobile).
             email_sel = (
                 "input[type=email], input[type=text], input[name=email], "
                 "input[name=username], input[placeholder*=mail i], "
                 "input[placeholder*=mobile i], input[placeholder*=email i]"
             )
-            page.wait_for_selector(email_sel, state="visible", timeout=30000)
-            log.info("Email/mobile field visible. Filling...")
+            page.wait_for_selector(email_sel, state="visible", timeout=45000)
+            log.info("Email/mobile field visible. URL: {}".format(page.url))
+            page.screenshot(path="login_step1_loaded.png")
             page.locator(email_sel).first.fill(config.UP_EMAIL)
             page.screenshot(path="login_step2_email_filled.png")
 
