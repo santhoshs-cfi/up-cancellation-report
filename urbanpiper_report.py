@@ -2,19 +2,11 @@
 UrbanPiper Atlas - Automated Report Generator
 ==============================================
 Usage:
-    python urbanpiper_report.py smart    -> Auto-detects what to send based on today's date:
-                                           Always:        daily report (yesterday's data)
-                                           If Monday:   + weekly report (last 7 days)
-                                           If 1st:      + monthly report (full prev month)
-
-    python urbanpiper_report.py daily    -> Yesterday's data only
-    python urbanpiper_report.py weekly   -> Last 7 days only
-    python urbanpiper_report.py monthly  -> Previous full month only
-    python urbanpiper_report.py test     -> Same as daily, for testing right now
-
-Requirements:
-    pip install playwright requests
-    python -m playwright install chromium
+    python urbanpiper_report.py smart    -> Always daily; +weekly on Mon; +monthly on 1st
+    python urbanpiper_report.py daily    -> Yesterday only
+    python urbanpiper_report.py weekly   -> Last 7 days
+    python urbanpiper_report.py monthly  -> Previous full month
+    python urbanpiper_report.py test     -> Same as daily, for quick testing
 """
 
 import sys
@@ -25,7 +17,6 @@ import requests
 import logging
 from datetime import date, timedelta
 
-# -- Setup logging -------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -36,11 +27,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# -- Import config -------------------------------------------------------------
 try:
     import config
 except ImportError:
-    log.error("config.py not found! Make sure config.py is in the same folder.")
+    log.error("config.py not found!")
     sys.exit(1)
 
 
@@ -49,45 +39,29 @@ except ImportError:
 # ==============================================================================
 
 def get_time_period(mode):
-    """Returns the timePeriod string expected by the UrbanPiper GraphQL API."""
     today = date.today()
-
     if mode in ("daily", "test"):
         return "YESTERDAY"
-
     elif mode == "weekly":
-        # Run on Monday -> last 7 days = previous Mon-Sun exactly
         return "LAST_7_DAYS"
-
     elif mode == "monthly":
-        # Calculate exact previous month (handles 28/29/30/31 day months correctly)
-        first_of_this_month = today.replace(day=1)
-        last_of_prev_month  = first_of_this_month - timedelta(days=1)
-        first_of_prev_month = last_of_prev_month.replace(day=1)
-        return "{},{}".format(first_of_prev_month.isoformat(), last_of_prev_month.isoformat())
-
+        first_of_this = today.replace(day=1)
+        last_of_prev  = first_of_this - timedelta(days=1)
+        first_of_prev = last_of_prev.replace(day=1)
+        return "{},{}".format(first_of_prev.isoformat(), last_of_prev.isoformat())
     else:
-        raise ValueError("Unknown mode '{}'. Use: smart, daily, weekly, monthly, test".format(mode))
+        raise ValueError("Unknown mode: {}".format(mode))
 
 
 def get_smart_modes():
-    """
-    Decides which reports to run today:
-    - Daily:   always
-    - Weekly:  only on Monday (weekday == 0)
-    - Monthly: only on 1st of month
-    """
     today = date.today()
     modes = ["daily"]
-
     if today.weekday() == 0:
         modes.append("weekly")
-        log.info("Today is Monday -> weekly report will also be sent.")
-
+        log.info("Today is Monday -> weekly report also.")
     if today.day == 1:
         modes.append("monthly")
-        log.info("Today is 1st of month -> monthly report will also be sent.")
-
+        log.info("Today is 1st -> monthly report also.")
     return modes
 
 
@@ -96,13 +70,12 @@ def get_smart_modes():
 # ==============================================================================
 
 def load_cached_session():
-    """Load previously saved cookies from disk. Returns dict or None."""
-    session_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.SESSION_FILE)
-    if os.path.exists(session_path):
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.SESSION_FILE)
+    if os.path.exists(path):
         try:
-            with open(session_path) as f:
+            with open(path) as f:
                 data = json.load(f)
-            log.info("Loaded cached session from {}".format(config.SESSION_FILE))
+            log.info("Loaded cached session.")
             return data
         except Exception as e:
             log.warning("Could not load session cache: {}".format(e))
@@ -110,18 +83,16 @@ def load_cached_session():
 
 
 def save_session(cookies):
-    """Save cookies to disk for reuse."""
-    session_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.SESSION_FILE)
-    with open(session_path, "w") as f:
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.SESSION_FILE)
+    with open(path, "w") as f:
         json.dump(cookies, f)
-    log.info("Session saved to {}".format(config.SESSION_FILE))
+    log.info("Session saved.")
 
 
 def delete_session():
-    """Remove cached session (forces re-login on next attempt)."""
-    session_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.SESSION_FILE)
-    if os.path.exists(session_path):
-        os.remove(session_path)
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.SESSION_FILE)
+    if os.path.exists(path):
+        os.remove(path)
         log.info("Cached session deleted.")
 
 
@@ -130,13 +101,8 @@ def delete_session():
 # ==============================================================================
 
 def login_and_get_cookies():
-    """
-    Opens a headless Chromium browser, logs into Atlas, returns session cookies.
-    Saves cookies to disk for reuse so login only happens when session expires.
-    """
     from playwright.sync_api import sync_playwright
-
-    log.info("Starting browser login to UrbanPiper Atlas...")
+    log.info("Starting browser login...")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -146,7 +112,6 @@ def login_and_get_cookies():
         try:
             page.goto(config.ATLAS_LOGIN_URL, wait_until="networkidle", timeout=30000)
             log.info("Login page loaded.")
-
             page.fill(
                 'input[type="email"], input[name="email"], input[name="username"], input[placeholder*="mail" i]',
                 config.UP_EMAIL
@@ -155,11 +120,9 @@ def login_and_get_cookies():
             page.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in")')
             page.wait_for_url("**/home**", timeout=20000)
             log.info("Login successful!")
-
         except Exception as e:
             page.screenshot(path="login_debug.png")
             log.error("Login failed: {}".format(e))
-            log.error("Screenshot saved as login_debug.png")
             browser.close()
             raise
 
@@ -168,12 +131,12 @@ def login_and_get_cookies():
 
     cookies = {c["name"]: c["value"] for c in raw_cookies}
     save_session(cookies)
-    log.info("Extracted {} cookies from browser session.".format(len(cookies)))
+    log.info("Extracted {} cookies.".format(len(cookies)))
     return cookies
 
 
 # ==============================================================================
-#  GRAPHQL API CALL
+#  GRAPHQL DEFINITIONS
 # ==============================================================================
 
 GENERATE_REPORT_MUTATION = """
@@ -181,11 +144,7 @@ mutation generateReport($input: ReportGenerationInput!) {
   generateReportV2(input: $input) {
     status {
       success
-      messages {
-        field
-        message
-        __typename
-      }
+      messages { field message __typename }
       __typename
     }
     __typename
@@ -193,12 +152,31 @@ mutation generateReport($input: ReportGenerationInput!) {
 }
 """
 
+GET_TASK_LIST_QUERY = """
+query getReportsTaskList($limit: Int, $offset: Int, $filters: [ListFilterArgument]) {
+  reportTaskList(limit: $limit, offset: $offset, filters: $filters) {
+    count
+    objects { status name jobId message downloadUrl __typename }
+    __typename
+  }
+}
+"""
+
+REPORT_DOWNLOAD_BASE = "https://report.svc.urbanpiper.com/v1/report/{job_id}/download"
+
+_HEADERS = {
+    "Content-Type": "application/json",
+    "Origin":       "https://atlas.urbanpiper.com",
+    "Referer":      "https://atlas.urbanpiper.com/",
+    "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+}
+
+
+# ==============================================================================
+#  GENERATE REPORT (email delivery mode)
+# ==============================================================================
+
 def generate_report(cookies, time_period):
-    """
-    Calls the UrbanPiper GraphQL API to queue report generation.
-    UrbanPiper emails the CSV directly to everyone in config.REPORT_EMAILS.
-    Returns True on success, False on failure.
-    """
     payload = {
         "operationName": "generateReport",
         "variables": {
@@ -218,117 +196,46 @@ def generate_report(cookies, time_period):
         },
         "query": GENERATE_REPORT_MUTATION
     }
-
-    headers = {
-        "Content-Type": "application/json",
-        "Origin":       "https://atlas.urbanpiper.com",
-        "Referer":      "https://atlas.urbanpiper.com/",
-        "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/148.0.0.0 Safari/537.36",
-    }
-
     log.info("Calling API | timePeriod={} | recipients={}".format(time_period, config.REPORT_EMAILS))
-
     try:
-        response = requests.post(
-            config.ATLAS_GRAPHQL_URL,
-            json=payload,
-            headers=headers,
-            cookies=cookies,
-            timeout=30
-        )
-        response.raise_for_status()
-        result = response.json()
-
-        gql_status = result.get("data", {}).get("generateReportV2", {}).get("status", {})
-        if gql_status.get("success"):
-            for m in gql_status.get("messages", []):
+        r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=_HEADERS, cookies=cookies, timeout=30)
+        r.raise_for_status()
+        gql = r.json().get("data", {}).get("generateReportV2", {}).get("status", {})
+        if gql.get("success"):
+            for m in gql.get("messages", []):
                 log.info("API: {}".format(m.get("message")))
-            log.info("Report queued successfully. UrbanPiper will email it to recipients.")
+            log.info("Report queued. UrbanPiper will email it.")
             return True
         else:
-            log.error("API returned failure: {}".format(gql_status.get("messages")))
+            log.error("API failure: {}".format(gql.get("messages")))
             return False
-
-    except requests.exceptions.RequestException as e:
-        log.error("HTTP error: {}".format(e))
-        return False
     except Exception as e:
-        log.error("Unexpected error: {}".format(e))
+        log.error("Error: {}".format(e))
         return False
 
 
 # ==============================================================================
-#  POLL + DOWNLOAD
+#  POLL + DOWNLOAD (used by run_automation.py)
 # ==============================================================================
 
-GET_TASK_LIST_QUERY = """
-query getReportsTaskList($limit: Int, $offset: Int, $filters: [ListFilterArgument]) {
-  reportTaskList(limit: $limit, offset: $offset, filters: $filters) {
-    count
-    objects {
-      status
-      name
-      jobId
-      message
-      downloadUrl
-      __typename
-    }
-    __typename
-  }
-}
-"""
-
-REPORT_DOWNLOAD_BASE = "https://report.svc.urbanpiper.com/v1/report/{job_id}/download"
-
-
-def _query_task_list(cookies, status_filter=None):
-    """
-    Calls getReportsTaskList GraphQL query.
-    Returns list of task objects: [{status, name, jobId, message, downloadUrl}, ...]
-    """
-    filters = []
-    if status_filter:
-        filters = [{"field": "status", "value": status_filter}]
-
+def _query_task_list(cookies):
     payload = {
         "operationName": "getReportsTaskList",
-        "variables": {"limit": 50, "offset": 0, "filters": filters},
+        "variables": {"limit": 50, "offset": 0, "filters": []},
         "query": GET_TASK_LIST_QUERY,
     }
-    headers = {
-        "Content-Type": "application/json",
-        "Origin":       "https://atlas.urbanpiper.com",
-        "Referer":      "https://atlas.urbanpiper.com/",
-        "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/148.0.0.0 Safari/537.36",
-    }
-
-    resp = requests.post(
-        config.ATLAS_GRAPHQL_URL,
-        json=payload,
-        headers=headers,
-        cookies=cookies,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("data", {}).get("reportTaskList", {}).get("objects", [])
+    r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=_HEADERS, cookies=cookies, timeout=30)
+    r.raise_for_status()
+    return r.json().get("data", {}).get("reportTaskList", {}).get("objects", [])
 
 
 def generate_and_download_csv(cookies, time_period, poll_interval=15, max_wait=600):
     """
-    Triggers report generation and polls until the CSV is ready, then downloads it.
-
-    Args:
-        cookies       : session cookies dict
-        time_period   : Atlas timePeriod string (e.g. "YESTERDAY")
-        poll_interval : seconds between status polls (default 15)
-        max_wait      : max total seconds to wait (default 600 = 10 minutes)
-
-    Returns:
-        (bytes, job_id) — raw CSV bytes and the Atlas job ID
+    Generates the report via GraphQL, polls until complete, then downloads the CSV.
+    Returns (csv_bytes, job_id).
     """
-    # Step 1: Queue the report (no email recipients — download-only)
-    log.info("Requesting report generation | timePeriod={}".format(time_period))
+    # Step 1: Queue report (no email recipients)
+    log.info("Queuing report | timePeriod={}".format(time_period))
     payload = {
         "operationName": "generateReport",
         "variables": {
@@ -336,8 +243,125 @@ def generate_and_download_csv(cookies, time_period, poll_interval=15, max_wait=6
                 "id":           config.REPORT_ID,
                 "name":         config.REPORT_NAME,
                 "exportFormat": config.EXPORT_FORMAT,
-                "emails":       [],          # empty — we download directly
+                "emails":       [],
                 "filters": {
                     "platforms":   config.PLATFORMS,
                     "locations":   config.LOCATION_IDS,
-                    "orderSta
+                    "orderStates": config.ORDER_STATES,
+                    "timePeriod":  time_period,
+                },
+                "newVersion": True,
+            }
+        },
+        "query": GENERATE_REPORT_MUTATION,
+    }
+    r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=_HEADERS, cookies=cookies, timeout=30)
+    r.raise_for_status()
+    gql = r.json().get("data", {}).get("generateReportV2", {}).get("status", {})
+    if not gql.get("success"):
+        raise RuntimeError("generateReportV2 failed: {}".format(gql.get("messages")))
+    log.info("Report queued. Polling every {}s (max {}s)...".format(poll_interval, max_wait))
+
+    # Step 2: Poll for completion
+    deadline  = time.time() + max_wait
+    found_job = None
+
+    while time.time() < deadline:
+        time.sleep(poll_interval)
+        tasks = _query_task_list(cookies)
+        for task in tasks:
+            if config.REPORT_NAME.lower() in task.get("name", "").lower():
+                found_job = task
+                break
+
+        if not found_job:
+            log.info("Not in task list yet -- waiting...")
+            continue
+
+        status = found_job.get("status", "")
+        job_id = found_job.get("jobId", "")
+        log.info("Status: {} | jobId: {}".format(status, job_id))
+
+        if status == "completed":
+            break
+        elif status == "failed":
+            raise RuntimeError("Atlas report FAILED: {}".format(found_job.get("message")))
+
+        found_job = None   # reset, keep polling
+    else:
+        raise TimeoutError("Report did not complete within {} seconds.".format(max_wait))
+
+    job_id       = found_job.get("jobId", "")
+    download_url = found_job.get("downloadUrl") or REPORT_DOWNLOAD_BASE.format(job_id=job_id)
+    log.info("Downloading from: {}".format(download_url))
+
+    # Step 3: Download CSV
+    dl = requests.get(download_url, cookies=cookies, headers={"User-Agent": _HEADERS["User-Agent"]}, timeout=120, stream=True)
+    dl.raise_for_status()
+    csv_bytes = dl.content
+    log.info("Downloaded {:,} bytes.".format(len(csv_bytes)))
+    return csv_bytes, job_id
+
+
+# ==============================================================================
+#  CORE EXECUTION
+# ==============================================================================
+
+def get_cookies_with_retry():
+    cookies = load_cached_session()
+    if cookies:
+        return cookies
+    log.info("No cached session -- fresh login...")
+    return login_and_get_cookies()
+
+
+def run_report(cookies, mode):
+    time_period = get_time_period(mode)
+    log.info("--- {} | timePeriod={} ---".format(mode.upper(), time_period))
+    success = generate_report(cookies, time_period)
+    if not success:
+        log.warning("Failed -- re-logging in...")
+        delete_session()
+        cookies = login_and_get_cookies()
+        success = generate_report(cookies, time_period)
+    if not success:
+        log.error("FAILED after re-login: {}".format(mode.upper()))
+        sys.exit(1)
+    return cookies
+
+
+# ==============================================================================
+#  MAIN
+# ==============================================================================
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    mode = sys.argv[1].lower().strip()
+
+    if not config.UP_EMAIL or config.UP_EMAIL == "your-email@company.com":
+        log.error("UP_EMAIL not set!")
+        sys.exit(1)
+    if not config.UP_PASSWORD or config.UP_PASSWORD == "your-password-here":
+        log.error("UP_PASSWORD not set!")
+        sys.exit(1)
+
+    today = date.today()
+    log.info("=" * 60)
+    log.info("Mode: {} | Date: {} ({})".format(mode.upper(), today.isoformat(), today.strftime("%A")))
+
+    modes_to_run = get_smart_modes() if mode == "smart" else [mode]
+    log.info("Reports: {}".format([m.upper() for m in modes_to_run]))
+
+    cookies = get_cookies_with_retry()
+    for m in modes_to_run:
+        cookies = run_report(cookies, m)
+
+    log.info("Done. {} report(s) sent.".format(len(modes_to_run)))
+    log.info("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
