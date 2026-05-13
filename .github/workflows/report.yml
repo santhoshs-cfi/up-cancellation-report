@@ -26,12 +26,15 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install chromium --with-deps
 
-      - name: Run full automation (generate → download → process → email)
+      - name: Run full automation (generate -> download -> process -> email)
         env:
           UP_EMAIL:          ${{ secrets.UP_EMAIL }}
           UP_PASSWORD:       ${{ secrets.UP_PASSWORD }}
           GMAIL_CREDENTIALS: ${{ secrets.GMAIL_CREDENTIALS }}
           GMAIL_TOKEN:       ${{ secrets.GMAIL_TOKEN }}
+          NORTH_EMAIL:       ${{ secrets.NORTH_EMAIL }}
+          SOUTH_EMAIL:       ${{ secrets.SOUTH_EMAIL }}
+          WEST_EMAIL:        ${{ secrets.WEST_EMAIL }}
         run: python run_automation.py smart
 
       - name: Upload logs on failure

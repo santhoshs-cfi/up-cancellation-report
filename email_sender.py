@@ -7,8 +7,9 @@ Credentials come from environment variables (GitHub Secrets):
     GMAIL_CREDENTIALS  - contents of credentials.json  (JSON string)
     GMAIL_TOKEN        - contents of token.json         (JSON string)
 
-Zone recipient emails come from email_config.json (editable flat file):
-    { "north_email": "...", "south_email": "...", "west_email": "..." }
+Zone recipient emails — checked in this order:
+    1. Env vars: NORTH_EMAIL, SOUTH_EMAIL, WEST_EMAIL  (GitHub Secrets)
+    2. email_config.json on disk                        (local dev fallback)
 """
 
 import base64
@@ -20,6 +21,7 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email import encoders
+import email.policy
 
 log = logging.getLogger(__name__)
 
@@ -34,25 +36,45 @@ _GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 def load_email_config():
     """
-    Returns dict: {"north": "...", "south": "...", "west": "..."}
-    Reads email_config.json from the same folder as this script.
+    Returns dict: {"North": "...", "South": "...", "West": "..."}
+
+    Priority order:
+      1. Environment variables NORTH_EMAIL, SOUTH_EMAIL, WEST_EMAIL
+         (set as GitHub Secrets — change emails without touching any file)
+      2. email_config.json on disk (for local dev runs)
     """
+    # ── Option 1: env vars (GitHub Actions / any CI) ──────────────────────────
+    north = os.environ.get("NORTH_EMAIL", "")
+    south = os.environ.get("SOUTH_EMAIL", "")
+    west  = os.environ.get("WEST_EMAIL",  "")
+
+    if north or south or west:
+        log.info("Zone emails loaded from environment variables.")
+        mapping = {"North": north, "South": south, "West": west}
+        for zone, addr in mapping.items():
+            if not addr:
+                log.warning("Env var missing for {} zone email.".format(zone))
+        return mapping
+
+    # ── Option 2: email_config.json (local dev fallback) ──────────────────────
     if not os.path.exists(_EMAIL_CFG):
         raise FileNotFoundError(
-            "email_config.json not found at {}. "
-            "Create it with keys: north_email, south_email, west_email".format(_EMAIL_CFG)
+            "No zone emails found.\n"
+            "Either set NORTH_EMAIL / SOUTH_EMAIL / WEST_EMAIL env vars\n"
+            "or create email_config.json with keys: north_email, south_email, west_email"
         )
     with open(_EMAIL_CFG) as f:
         cfg = json.load(f)
 
+    log.info("Zone emails loaded from email_config.json.")
     mapping = {
         "North": cfg.get("north_email", ""),
         "South": cfg.get("south_email", ""),
         "West":  cfg.get("west_email",  ""),
     }
-    for zone, email in mapping.items():
-        if not email:
-            log.warning("email_config.json: {} zone email is empty".format(zone))
+    for zone, addr in mapping.items():
+        if not addr:
+            log.warning("email_config.json: {} zone email is empty.".format(zone))
     return mapping
 
 
@@ -81,12 +103,11 @@ def _build_gmail_service():
     creds = None
 
     # ── Option 1: env vars (GitHub Actions) ──────────────────────────────────
-    creds_json_str  = os.environ.get("GMAIL_CREDENTIALS", "")
-    token_json_str  = os.environ.get("GMAIL_TOKEN", "")
+    creds_json_str = os.environ.get("GMAIL_CREDENTIALS", "")
+    token_json_str = os.environ.get("GMAIL_TOKEN", "")
 
     if creds_json_str and token_json_str:
         log.info("Loading Gmail credentials from environment variables.")
-        # Write to temp files (google-auth library needs file paths)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tf:
             tf.write(token_json_str)
             token_tmp = tf.name
@@ -148,11 +169,11 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str, top3_stores
     """
     service = _build_gmail_service()
 
-    # ── Build email body ──────────────────────────────────────────────────────
+    # ── Build email body (ASCII-safe only) ────────────────────────────────────
     top3_block = ""
     if top3_stores:
         lines = [
-            "  {}. {} — {}".format(i + 1, s["Store Name"], s["Count"])
+            "  {}. {} - {}".format(i + 1, s.get("Store Name", ""), s.get("Count", ""))
             for i, s in enumerate(top3_stores[:3])
         ]
         top3_block = "\nTop Kitchen Cancellation Stores:\n" + "\n".join(lines) + "\n"
@@ -164,27 +185,45 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str, top3_stores
         "This is an automated report. Do not reply to this email.\n"
     ).format(zone=zone, date=date_str, top3=top3_block)
 
-    # ── Compose MIME message ──────────────────────────────────────────────────
-    msg = MIMEMultipart()
-    msg["To"]      = to_email
-    msg["Subject"] = "[{zone} Zone] Cancellation Report — {date}".format(
+    # ── Compose MIME message (ASCII-safe subject — no unicode dashes) ─────────
+    subject = "[{zone} Zone] Cancellation Report - {date}".format(
         zone=zone, date=date_str
     )
-    msg.attach(MIMEText(body, "plain"))
 
-    attachment = MIMEBase("application", "octet-stream")
-    attachment.set_payload(excel_bytes.getvalue())
+    msg = MIMEMultipart()
+    msg["To"]      = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    # ── Attach Excel file ──────────────────────────────────────────────────────
+    excel_data = excel_bytes.getvalue()
+    log.info("Attaching {} - size: {:,} bytes".format(filename, len(excel_data)))
+
+    attachment = MIMEBase("application",
+                          "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    attachment.set_payload(excel_data)
     encoders.encode_base64(attachment)
     attachment.add_header(
         "Content-Disposition",
-        "attachment; filename={}".format(filename)
+        'attachment; filename="{}"'.format(filename)
     )
     msg.attach(attachment)
 
-    # ── Send ──────────────────────────────────────────────────────────────────
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    service.users().messages().send(userId="me", body={"raw": raw}).execute()
-    log.info("Email sent to {} ({} zone)".format(to_email, zone))
+    # ── Encode and send via Gmail API ──────────────────────────────────────────
+    # Use policy=email.policy.SMTP to ensure proper ASCII-safe encoding
+    raw = base64.urlsafe_b64encode(
+        msg.as_bytes(policy=email.policy.SMTP)
+    ).decode("utf-8")
+
+    result = service.users().messages().send(
+        userId="me", body={"raw": raw}
+    ).execute()
+
+    msg_id = result.get("id", "unknown")
+    log.info("Email sent to {} ({} zone) | Gmail message ID: {}".format(
+        to_email, zone, msg_id
+    ))
+    return msg_id
 
 
 def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None):
@@ -196,23 +235,25 @@ def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None):
         date_str          : human-readable date label (for subject + body)
         zone_kitchen_top3 : optional dict {"North": [...], "South": [...], "West": [...]}
     """
-    email_cfg   = load_email_config()
+    email_cfg         = load_email_config()
     zone_kitchen_top3 = zone_kitchen_top3 or {}
 
     results = {}
     for zone, excel_buf in zone_excels.items():
         to_email = email_cfg.get(zone, "")
         if not to_email:
-            log.warning("Skipping {} zone — no email configured.".format(zone))
+            log.warning("Skipping {} zone - no email configured.".format(zone))
             results[zone] = "skipped (no email)"
             continue
 
-        filename = "{}_Cancellation_Report_{}.xlsx".format(zone, date_str.replace(" ", "_"))
-        top3     = zone_kitchen_top3.get(zone, [])
+        filename = "{}_Cancellation_Report_{}.xlsx".format(
+            zone, date_str.replace(" ", "_")
+        )
+        top3 = zone_kitchen_top3.get(zone, [])
 
         try:
             send_zone_email(to_email, zone, excel_buf, filename, date_str, top3)
-            results[zone] = "sent → {}".format(to_email)
+            results[zone] = "sent -> {}".format(to_email)
         except Exception as e:
             log.error("Failed to send {} zone email: {}".format(zone, e))
             results[zone] = "FAILED: {}".format(e)
