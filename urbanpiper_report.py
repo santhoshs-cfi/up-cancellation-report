@@ -143,12 +143,14 @@ def login_and_get_cookies():
             page.screenshot(path="login_step3_pwd_visible.png")
             page.locator("input[type=password]").first.fill(config.UP_PASSWORD)
 
-            # Submit password
-            page.locator("button[type=submit], input[type=submit]").first.click()
-            log.info("Submitted password. Waiting for Atlas...")
-
-            # Wait for redirect back to atlas.urbanpiper.com
-            page.wait_for_url("*atlas.urbanpiper.com*", timeout=30000, wait_until="commit")
+            # Submit password — use expect_navigation BEFORE click so we
+            # never miss the redirect event (avoids already-fired race condition)
+            with page.expect_navigation(
+                url="*atlas.urbanpiper.com*",
+                wait_until="commit",
+                timeout=30000
+            ):
+                page.locator("button[type=submit], input[type=submit]").first.click()
             page.screenshot(path="login_step4_success.png")
             log.info("Login successful! URL: {}".format(page.url))
 
