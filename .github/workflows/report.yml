@@ -1,0 +1,45 @@
+name: UrbanPiper Automated Reports
+
+on:
+  # Triggered exclusively by cron-job.org via GitHub API
+  # Manual run also available from the Actions tab in GitHub
+  workflow_dispatch:
+
+jobs:
+  send-reports:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install chromium --with-deps
+
+      - name: Run smart report
+        env:
+          UP_EMAIL:      ${{ secrets.UP_EMAIL }}
+          UP_PASSWORD:   ${{ secrets.UP_PASSWORD }}
+          REPORT_EMAILS: ${{ secrets.REPORT_EMAILS }}
+        run: python urbanpiper_report.py smart
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: report-failure-log
+          path: |
+            urbanpiper_report.log
+            login_debug.png
+          if-no-files-found: ignore
+          retention-days: 7
