@@ -20,6 +20,7 @@ Requirements:
 import sys
 import json
 import os
+import time
 import requests
 import logging
 from datetime import date, timedelta
@@ -257,91 +258,86 @@ def generate_report(cookies, time_period):
 
 
 # ==============================================================================
-#  CORE EXECUTION
+#  POLL + DOWNLOAD
 # ==============================================================================
 
-def get_cookies_with_retry():
+GET_TASK_LIST_QUERY = """
+query getReportsTaskList($limit: Int, $offset: Int, $filters: [ListFilterArgument]) {
+  reportTaskList(limit: $limit, offset: $offset, filters: $filters) {
+    count
+    objects {
+      status
+      name
+      jobId
+      message
+      downloadUrl
+      __typename
+    }
+    __typename
+  }
+}
+"""
+
+REPORT_DOWNLOAD_BASE = "https://report.svc.urbanpiper.com/v1/report/{job_id}/download"
+
+
+def _query_task_list(cookies, status_filter=None):
     """
-    Returns valid session cookies.
-    Uses cache first; only opens a browser if no cache exists.
-    Login happens once per run even when multiple reports are sent.
+    Calls getReportsTaskList GraphQL query.
+    Returns list of task objects: [{status, name, jobId, message, downloadUrl}, ...]
     """
-    cookies = load_cached_session()
-    if cookies:
-        return cookies
-    log.info("No cached session found — performing fresh login...")
-    return login_and_get_cookies()
+    filters = []
+    if status_filter:
+        filters = [{"field": "status", "value": status_filter}]
+
+    payload = {
+        "operationName": "getReportsTaskList",
+        "variables": {"limit": 50, "offset": 0, "filters": filters},
+        "query": GET_TASK_LIST_QUERY,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Origin":       "https://atlas.urbanpiper.com",
+        "Referer":      "https://atlas.urbanpiper.com/",
+        "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/148.0.0.0 Safari/537.36",
+    }
+
+    resp = requests.post(
+        config.ATLAS_GRAPHQL_URL,
+        json=payload,
+        headers=headers,
+        cookies=cookies,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("data", {}).get("reportTaskList", {}).get("objects", [])
 
 
-def run_report(cookies, mode):
+def generate_and_download_csv(cookies, time_period, poll_interval=15, max_wait=600):
     """
-    Runs a single report for the given mode.
-    Auto re-logins if the session has expired.
-    Returns the (possibly refreshed) cookies dict.
+    Triggers report generation and polls until the CSV is ready, then downloads it.
+
+    Args:
+        cookies       : session cookies dict
+        time_period   : Atlas timePeriod string (e.g. "YESTERDAY")
+        poll_interval : seconds between status polls (default 15)
+        max_wait      : max total seconds to wait (default 600 = 10 minutes)
+
+    Returns:
+        (bytes, job_id) — raw CSV bytes and the Atlas job ID
     """
-    time_period = get_time_period(mode)
-    log.info("--- {} report | timePeriod={} ---".format(mode.upper(), time_period))
-
-    success = generate_report(cookies, time_period)
-
-    if not success:
-        log.warning("Request failed. Session may be expired. Re-logging in...")
-        delete_session()
-        cookies = login_and_get_cookies()
-        success = generate_report(cookies, time_period)
-
-    if not success:
-        log.error("FAILED: {} report failed even after re-login.".format(mode.upper()))
-        sys.exit(1)
-
-    return cookies
-
-
-# ==============================================================================
-#  MAIN
-# ==============================================================================
-
-def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
-
-    mode = sys.argv[1].lower().strip()
-
-    # Validate credentials
-    if not config.UP_EMAIL or config.UP_EMAIL == "your-email@company.com":
-        log.error("Set UP_EMAIL in config.py (or as env var) before running!")
-        sys.exit(1)
-    if not config.UP_PASSWORD or config.UP_PASSWORD == "your-password-here":
-        log.error("Set UP_PASSWORD in config.py (or as env var) before running!")
-        sys.exit(1)
-
-    if not config.REPORT_EMAILS:
-        log.warning("REPORT_EMAILS is empty — report will be generated but NOT emailed.")
-
-    today = date.today()
-    log.info("=" * 60)
-    log.info("UrbanPiper Automation | Mode: {} | Date: {} ({})".format(
-        mode.upper(), today.isoformat(), today.strftime("%A")
-    ))
-
-    # Determine which reports to send
-    if mode == "smart":
-        modes_to_run = get_smart_modes()
-    else:
-        modes_to_run = [mode]
-
-    log.info("Reports to send this run: {}".format([m.upper() for m in modes_to_run]))
-
-    # Login once, reuse the session for all reports in this run
-    cookies = get_cookies_with_retry()
-
-    for m in modes_to_run:
-        cookies = run_report(cookies, m)
-
-    log.info("Done. {} report(s) sent successfully.".format(len(modes_to_run)))
-    log.info("=" * 60)
-
-
-if __name__ == "__main__":
-    main()
+    # Step 1: Queue the report (no email recipients — download-only)
+    log.info("Requesting report generation | timePeriod={}".format(time_period))
+    payload = {
+        "operationName": "generateReport",
+        "variables": {
+            "input": {
+                "id":           config.REPORT_ID,
+                "name":         config.REPORT_NAME,
+                "exportFormat": config.EXPORT_FORMAT,
+                "emails":       [],          # empty — we download directly
+                "filters": {
+                    "platforms":   config.PLATFORMS,
+                    "locations":   config.LOCATION_IDS,
+                    "orderSta

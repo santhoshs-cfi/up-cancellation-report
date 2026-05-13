@@ -8,7 +8,7 @@ on:
 jobs:
   send-reports:
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -26,20 +26,21 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install chromium --with-deps
 
-      - name: Run smart report
+      - name: Run full automation (generate → download → process → email)
         env:
-          UP_EMAIL:      ${{ secrets.UP_EMAIL }}
-          UP_PASSWORD:   ${{ secrets.UP_PASSWORD }}
-          REPORT_EMAILS: ${{ secrets.REPORT_EMAILS }}
-        run: python urbanpiper_report.py smart
+          UP_EMAIL:          ${{ secrets.UP_EMAIL }}
+          UP_PASSWORD:       ${{ secrets.UP_PASSWORD }}
+          GMAIL_CREDENTIALS: ${{ secrets.GMAIL_CREDENTIALS }}
+          GMAIL_TOKEN:       ${{ secrets.GMAIL_TOKEN }}
+        run: python run_automation.py smart
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: report-failure-log
+          name: automation-failure-log
           path: |
-            urbanpiper_report.log
+            automation.log
             login_debug.png
           if-no-files-found: ignore
           retention-days: 7
