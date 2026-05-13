@@ -106,23 +106,49 @@ def login_and_get_cookies():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
-        page    = context.new_page()
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
 
         try:
-            page.goto(config.ATLAS_LOGIN_URL, wait_until="networkidle", timeout=30000)
-            log.info("Login page loaded.")
-            page.fill(
-                'input[type="email"], input[name="email"], input[name="username"], input[placeholder*="mail" i]',
-                config.UP_EMAIL
+            # Navigate and wait for DOM ready
+            page.goto(config.ATLAS_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
+            log.info("Page DOM loaded. Waiting for email input...")
+
+            # Screenshot so we can see the page state on failure
+            page.screenshot(path="login_debug.png")
+
+            # Wait explicitly for any text/email input to appear (up to 30s)
+            email_locator = page.locator(
+                "input[type=email], input[type=text], input[name=email], "
+                "input[name=username], input[placeholder*=mail i], input[placeholder*=email i]"
+            ).first
+            email_locator.wait_for(state="visible", timeout=30000)
+            log.info("Email input found. Filling credentials...")
+
+            email_locator.fill(config.UP_EMAIL)
+            page.locator("input[type=password]").first.fill(config.UP_PASSWORD)
+
+            # Click submit
+            submit = page.locator(
+                'button[type=submit], button:has-text("Login"), '
+                'button:has-text("Sign in"), button:has-text("Log in")'
+            ).first
+            submit.click()
+
+            # Wait for redirect away from the login page (home / dashboard / reports)
+            page.wait_for_function(
+                "!window.location.pathname.startsWith('/login') && "
+                "!window.location.pathname === '/'",
+                timeout=30000
             )
-            page.fill('input[type="password"]', config.UP_PASSWORD)
-            page.click('button[type="submit"], button:has-text("Login"), button:has-text("Sign in")')
-            page.wait_for_url("**/home**", timeout=20000)
-            log.info("Login successful!")
+            log.info("Login successful! URL: {}".format(page.url))
+
         except Exception as e:
             page.screenshot(path="login_debug.png")
             log.error("Login failed: {}".format(e))
+            log.error("Current URL: {}".format(page.url))
             browser.close()
             raise
 
@@ -357,11 +383,4 @@ def main():
 
     cookies = get_cookies_with_retry()
     for m in modes_to_run:
-        cookies = run_report(cookies, m)
-
-    log.info("Done. {} report(s) sent.".format(len(modes_to_run)))
-    log.info("=" * 60)
-
-
-if __name__ == "__main__":
-    main()
+        cook
