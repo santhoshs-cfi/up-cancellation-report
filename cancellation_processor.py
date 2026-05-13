@@ -455,16 +455,18 @@ def process_csv(csv_bytes):
         export_df[col] = export_df[col].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("None")
     export_df = export_df.fillna("None")
 
-    # Build per-zone Excel — only cancelled orders for that zone
-    # (Filtering here keeps Excel files under Gmail's 25 MB attachment limit)
+    # All cancelled orders across all zones (Sheet 1 of every zone Excel)
+    # ~16K rows — keeps file size well under Gmail's 25MB limit
+    all_cancelled_df = export_df[
+        export_df["Cancellation Category"] != "(Not cancelled)"
+    ].reset_index(drop=True)
+
+    # Build per-zone Excel — Sheet 1 = all cancelled (all zones, filterable by Zone column)
+    #                         Sheet 2 = zone-specific summary + kitchen breakdown
     zone_excels = {}
     for zone in ZONES:
         kitchen_df = build_kitchen_zone_breakdown(df, zone)
-        zone_cancelled_df = export_df[
-            (export_df["Zone"] == zone) &
-            (export_df["Cancellation Category"] != "(Not cancelled)")
-        ].reset_index(drop=True)
-        zone_excels[zone] = build_zonal_excel(zone_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zone)
-        print("Built Excel for {} zone ({} cancelled rows)".format(zone, len(zone_cancelled_df)))
+        zone_excels[zone] = build_zonal_excel(all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zone)
+        print("Built Excel for {} zone ({} total cancelled rows)".format(zone, len(all_cancelled_df)))
 
     return zone_excels, pivot_df, zone_pivot_df, total_orders, total_cancelled
