@@ -67,6 +67,7 @@ def get_smart_modes():
 
 # ==============================================================================
 #  SESSION MANAGEMENT
+#  Session file stores: {"cookies": {name: value}, "token": "JWT string or null"}
 # ==============================================================================
 
 def load_cached_session():
@@ -75,18 +76,24 @@ def load_cached_session():
         try:
             with open(path) as f:
                 data = json.load(f)
-            log.info("Loaded cached session.")
-            return data
+            # Support new format {"cookies": {...}, "token": "..."}
+            if isinstance(data, dict) and "cookies" in data:
+                log.info("Loaded cached session (token present: {}).".format(
+                    bool(data.get("token"))))
+                return data
+            # Old format: just a flat cookies dict — discard it
+            log.info("Old session format detected — will re-login.")
         except Exception as e:
             log.warning("Could not load session cache: {}".format(e))
     return None
 
 
-def save_session(cookies):
+def save_session(session):
+    """session = {"cookies": {...}, "token": "JWT or None"}"""
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config.SESSION_FILE)
     with open(path, "w") as f:
-        json.dump(cookies, f)
-    log.info("Session saved.")
+        json.dump(session, f)
+    log.info("Session saved (token present: {}).".format(bool(session.get("token"))))
 
 
 def delete_session():
@@ -100,7 +107,19 @@ def delete_session():
 #  PLAYWRIGHT LOGIN
 # ==============================================================================
 
-def login_and_get_cookies():
+def login_and_get_session():
+    """
+    Logs in via Playwright headless browser.
+    Returns session dict: {"cookies": {name: value, ...}, "token": "JWT or None"}
+
+    Auth flow:
+      1. Browser navigates to atlas.urbanpiper.com → redirects to login.urbanpiper.com
+      2. Two-step form: email → Continue → password → Submit
+      3. Login.urbanpiper.com redirects to atlas.urbanpiper.com/auth-service?access_token=JWT
+      4. Atlas SPA calls authServiceLogin GraphQL mutation → gets a session JWT back
+      5. JWT stored in localStorage; sent as "Authorization: JWT <token>" on every API call
+    We capture the JWT from localStorage after login completes.
+    """
     from playwright.sync_api import sync_playwright
     log.info("Starting browser login...")
 
@@ -111,42 +130,55 @@ def login_and_get_cookies():
         )
         page = context.new_page()
 
+        # Intercept authServiceLogin response to capture the JWT
+        captured_token = {"value": None}
+
+        def handle_response(response):
+            if "atlas-backend.svc.urbanpiper.com/graphql" not in response.url:
+                return
+            try:
+                body = response.json()
+                data = (body.get("data") or {})
+                login_data = data.get("loginAuthServiceAccess", {})
+                if login_data and login_data.get("status", {}).get("success"):
+                    token = login_data.get("token")
+                    if token:
+                        captured_token["value"] = token
+                        log.info("Captured JWT from authServiceLogin response.")
+            except Exception:
+                pass
+
+        page.on("response", handle_response)
+
         try:
-            # Navigate to Atlas — it JS-redirects to login.urbanpiper.com
-            # Use "commit" so goto returns as soon as the first bytes arrive,
-            # then we wait directly for the email input (works across redirects).
+            # Navigate to Atlas — JS-redirects to login.urbanpiper.com
             page.goto(config.ATLAS_LOGIN_URL, wait_until="commit", timeout=30000)
             log.info("Initial URL: {}".format(page.url))
 
             # ── Step 1: Email / Mobile input ──────────────────────────────────
-            # Wait for the email field — this naturally waits through the redirect.
-            # Broad selector: the input is type=text (accepts email OR mobile).
             email_sel = (
                 "input[type=email], input[type=text], input[name=email], "
                 "input[name=username], input[placeholder*=mail i], "
                 "input[placeholder*=mobile i], input[placeholder*=email i]"
             )
             page.wait_for_selector(email_sel, state="visible", timeout=45000)
-            log.info("Email/mobile field visible. URL: {}".format(page.url))
+            log.info("Email field visible. URL: {}".format(page.url))
             page.screenshot(path="login_step1_loaded.png")
             page.locator(email_sel).first.fill(config.UP_EMAIL)
             page.screenshot(path="login_step2_email_filled.png")
 
-            # Click the submit button to proceed
             page.locator("button[type=submit], input[type=submit]").first.click()
-            log.info("Clicked continue. URL: {}".format(page.url))
+            log.info("Clicked continue.")
 
             # ── Step 2: Password field ─────────────────────────────────────────
-            # May appear on same URL (SPA) or a new /password/ route
             page.wait_for_selector("input[type=password]", state="visible", timeout=30000)
             log.info("Password field visible. URL: {}".format(page.url))
             page.screenshot(path="login_step3_pwd_visible.png")
             page.locator("input[type=password]").first.fill(config.UP_PASSWORD)
 
-            # Submit password then poll window.location via JS.
-            # expect_navigation / wait_for_url both fail on 3-hop redirects;
-            # wait_for_function checks the URL directly — always reliable.
             page.locator("button[type=submit], input[type=submit]").first.click()
+
+            # Wait until we're back on atlas.urbanpiper.com (past all redirects)
             page.wait_for_function(
                 "window.location.hostname === 'atlas.urbanpiper.com' "
                 "&& window.location.pathname !== '/login'",
@@ -154,6 +186,28 @@ def login_and_get_cookies():
             )
             page.screenshot(path="login_step4_success.png")
             log.info("Login successful! URL: {}".format(page.url))
+
+            # Give the SPA a moment to fire authServiceLogin and store the token
+            page.wait_for_timeout(3000)
+
+            # Fallback: try to read token directly from localStorage
+            if not captured_token["value"]:
+                log.info("Trying to read token from localStorage...")
+                try:
+                    storage_json = page.evaluate(
+                        "() => JSON.stringify(Object.assign({}, localStorage))"
+                    )
+                    storage = json.loads(storage_json)
+                    log.info("localStorage keys: {}".format(list(storage.keys())))
+                    for key, val in storage.items():
+                        if isinstance(val, str) and len(val) > 50:
+                            # JWT tokens are long base64 strings
+                            if val.startswith("eyJ") or "token" in key.lower() or "auth" in key.lower():
+                                captured_token["value"] = val
+                                log.info("Found token in localStorage key: {}".format(key))
+                                break
+                except Exception as e:
+                    log.warning("localStorage read failed: {}".format(e))
 
         except Exception as e:
             page.screenshot(path="login_debug.png")
@@ -166,9 +220,38 @@ def login_and_get_cookies():
         browser.close()
 
     cookies = {c["name"]: c["value"] for c in raw_cookies}
-    save_session(cookies)
+    token   = captured_token["value"]
+
+    if token:
+        log.info("JWT token captured successfully (length {}).".format(len(token)))
+    else:
+        log.warning("No JWT token captured — API calls may fail. "
+                    "Proceeding with cookies-only session.")
+
+    session = {"cookies": cookies, "token": token}
+    save_session(session)
     log.info("Extracted {} cookies.".format(len(cookies)))
-    return cookies
+    return session
+
+
+# ==============================================================================
+#  API HEADERS
+# ==============================================================================
+
+def _make_headers(token=None):
+    """Build request headers, adding Authorization if we have a JWT."""
+    headers = {
+        "Content-Type":   "application/json",
+        "Origin":         "https://atlas.urbanpiper.com",
+        "Referer":        "https://atlas.urbanpiper.com/",
+        "User-Agent":     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "sec-fetch-site": "same-site",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty",
+    }
+    if token:
+        headers["Authorization"] = "JWT {}".format(token)
+    return headers
 
 
 # ==============================================================================
@@ -200,19 +283,16 @@ query getReportsTaskList($limit: Int, $offset: Int, $filters: [ListFilterArgumen
 
 REPORT_DOWNLOAD_BASE = "https://report.svc.urbanpiper.com/v1/report/{job_id}/download"
 
-_HEADERS = {
-    "Content-Type": "application/json",
-    "Origin":       "https://atlas.urbanpiper.com",
-    "Referer":      "https://atlas.urbanpiper.com/",
-    "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-}
-
 
 # ==============================================================================
-#  GENERATE REPORT (email delivery mode)
+#  GENERATE REPORT (email delivery mode — used by urbanpiper_report.py main)
 # ==============================================================================
 
-def generate_report(cookies, time_period):
+def generate_report(session, time_period):
+    cookies = session.get("cookies", {})
+    token   = session.get("token")
+    headers = _make_headers(token)
+
     payload = {
         "operationName": "generateReport",
         "variables": {
@@ -234,9 +314,17 @@ def generate_report(cookies, time_period):
     }
     log.info("Calling API | timePeriod={} | recipients={}".format(time_period, config.REPORT_EMAILS))
     try:
-        r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=_HEADERS, cookies=cookies, timeout=30)
+        r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
+                          cookies=cookies, timeout=30)
         r.raise_for_status()
-        gql = r.json().get("data", {}).get("generateReportV2", {}).get("status", {})
+        resp_json = r.json()
+        if resp_json.get("data") is None:
+            log.error("GraphQL returned data=null. Full response: {}".format(r.text[:500]))
+            errors = resp_json.get("errors", [])
+            if errors:
+                log.error("GraphQL errors: {}".format(errors))
+            return False
+        gql = (resp_json.get("data") or {}).get("generateReportV2", {}).get("status", {})
         if gql.get("success"):
             for m in gql.get("messages", []):
                 log.info("API: {}".format(m.get("message")))
@@ -254,22 +342,35 @@ def generate_report(cookies, time_period):
 #  POLL + DOWNLOAD (used by run_automation.py)
 # ==============================================================================
 
-def _query_task_list(cookies):
+def _query_task_list(session):
+    cookies = session.get("cookies", {})
+    token   = session.get("token")
+    headers = _make_headers(token)
+
     payload = {
         "operationName": "getReportsTaskList",
         "variables": {"limit": 50, "offset": 0, "filters": []},
         "query": GET_TASK_LIST_QUERY,
     }
-    r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=_HEADERS, cookies=cookies, timeout=30)
+    r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
+                      cookies=cookies, timeout=30)
     r.raise_for_status()
-    return r.json().get("data", {}).get("reportTaskList", {}).get("objects", [])
+    resp_json = r.json()
+    if resp_json.get("data") is None:
+        log.error("getReportsTaskList returned data=null: {}".format(r.text[:300]))
+        return []
+    return (resp_json.get("data") or {}).get("reportTaskList", {}).get("objects", [])
 
 
-def generate_and_download_csv(cookies, time_period, poll_interval=15, max_wait=600):
+def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=600):
     """
     Generates the report via GraphQL, polls until complete, then downloads the CSV.
     Returns (csv_bytes, job_id).
     """
+    cookies = session.get("cookies", {})
+    token   = session.get("token")
+    headers = _make_headers(token)
+
     # Step 1: Queue report (no email recipients)
     log.info("Queuing report | timePeriod={}".format(time_period))
     payload = {
@@ -291,11 +392,20 @@ def generate_and_download_csv(cookies, time_period, poll_interval=15, max_wait=6
         },
         "query": GENERATE_REPORT_MUTATION,
     }
-    r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=_HEADERS, cookies=cookies, timeout=30)
+    r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
+                      cookies=cookies, timeout=30)
     r.raise_for_status()
-    gql = r.json().get("data", {}).get("generateReportV2", {}).get("status", {})
+    resp_json = r.json()
+
+    if resp_json.get("data") is None:
+        log.error("generateReportV2 returned data=null. Full response: {}".format(r.text[:500]))
+        errors = resp_json.get("errors", [])
+        raise RuntimeError("generateReportV2 failed (data=null). errors={}".format(errors))
+
+    gql = (resp_json.get("data") or {}).get("generateReportV2", {}).get("status", {})
     if not gql.get("success"):
         raise RuntimeError("generateReportV2 failed: {}".format(gql.get("messages")))
+
     log.info("Report queued. Polling every {}s (max {}s)...".format(poll_interval, max_wait))
 
     # Step 2: Poll for completion
@@ -304,7 +414,7 @@ def generate_and_download_csv(cookies, time_period, poll_interval=15, max_wait=6
 
     while time.time() < deadline:
         time.sleep(poll_interval)
-        tasks = _query_task_list(cookies)
+        tasks = _query_task_list(session)
         for task in tasks:
             if config.REPORT_NAME.lower() in task.get("name", "").lower():
                 found_job = task
@@ -332,7 +442,10 @@ def generate_and_download_csv(cookies, time_period, poll_interval=15, max_wait=6
     log.info("Downloading from: {}".format(download_url))
 
     # Step 3: Download CSV
-    dl = requests.get(download_url, cookies=cookies, headers={"User-Agent": _HEADERS["User-Agent"]}, timeout=120, stream=True)
+    dl = requests.get(download_url, cookies=cookies,
+                      headers={"User-Agent": headers["User-Agent"],
+                               "Authorization": headers.get("Authorization", "")},
+                      timeout=120, stream=True)
     dl.raise_for_status()
     csv_bytes = dl.content
     log.info("Downloaded {:,} bytes.".format(len(csv_bytes)))
@@ -343,27 +456,36 @@ def generate_and_download_csv(cookies, time_period, poll_interval=15, max_wait=6
 #  CORE EXECUTION
 # ==============================================================================
 
-def get_cookies_with_retry():
-    cookies = load_cached_session()
-    if cookies:
-        return cookies
+def get_session_with_retry():
+    session = load_cached_session()
+    if session:
+        return session
     log.info("No cached session -- fresh login...")
-    return login_and_get_cookies()
+    return login_and_get_session()
 
 
-def run_report(cookies, mode):
+# Backward-compat alias (run_automation.py imports get_cookies_with_retry)
+def get_cookies_with_retry():
+    return get_session_with_retry()
+
+
+def delete_and_relogin():
+    delete_session()
+    return login_and_get_session()
+
+
+def run_report(session, mode):
     time_period = get_time_period(mode)
     log.info("--- {} | timePeriod={} ---".format(mode.upper(), time_period))
-    success = generate_report(cookies, time_period)
+    success = generate_report(session, time_period)
     if not success:
         log.warning("Failed -- re-logging in...")
-        delete_session()
-        cookies = login_and_get_cookies()
-        success = generate_report(cookies, time_period)
+        session = delete_and_relogin()
+        success = generate_report(session, time_period)
     if not success:
         log.error("FAILED after re-login: {}".format(mode.upper()))
         sys.exit(1)
-    return cookies
+    return session
 
 
 # ==============================================================================
@@ -391,6 +513,13 @@ def main():
     modes_to_run = get_smart_modes() if mode == "smart" else [mode]
     log.info("Reports: {}".format([m.upper() for m in modes_to_run]))
 
-    cookies = get_cookies_with_retry()
+    session = get_session_with_retry()
     for m in modes_to_run:
-        cook
+        session = run_report(session, m)
+
+    log.info("=" * 60)
+    log.info("All done.")
+
+
+if __name__ == "__main__":
+    main()

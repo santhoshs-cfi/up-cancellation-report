@@ -48,8 +48,8 @@ try:
     from urbanpiper_report import (
         get_time_period,
         get_smart_modes,
-        get_cookies_with_retry,
-        login_and_get_cookies,
+        get_session_with_retry,
+        login_and_get_session,
         delete_session,
         generate_and_download_csv,
     )
@@ -103,10 +103,10 @@ def make_date_label(mode):
 #  PIPELINE — ONE MODE (daily / weekly / monthly)
 # ==============================================================================
 
-def run_pipeline(cookies, mode):
+def run_pipeline(session, mode):
     """
     Full end-to-end pipeline for one report mode.
-    Returns the (possibly refreshed) cookies after execution.
+    Returns the (possibly refreshed) session after execution.
     """
     time_period = get_time_period(mode)
     date_label  = make_date_label(mode)
@@ -118,12 +118,12 @@ def run_pipeline(cookies, mode):
 
     # ── Step 1: Generate + download CSV ────────────────────────────────────────
     try:
-        csv_bytes, job_id = generate_and_download_csv(cookies, time_period)
+        csv_bytes, job_id = generate_and_download_csv(session, time_period)
     except Exception as e:
         log.warning("Download failed ({}). Trying re-login...".format(e))
         delete_session()
-        cookies  = login_and_get_cookies()
-        csv_bytes, job_id = generate_and_download_csv(cookies, time_period)
+        session   = login_and_get_session()
+        csv_bytes, job_id = generate_and_download_csv(session, time_period)
 
     log.info("CSV ready — {:,} bytes | jobId={}".format(len(csv_bytes), job_id))
 
@@ -141,18 +141,13 @@ def run_pipeline(cookies, mode):
         buf.seek(0)   # rewind so email sender can read from start
 
     # ── Step 3: Build top-3 kitchen stores per zone (for email body) ───────────
-    # zone_pivot_df has columns: Zone, Store Name, Kitchen Cancellation count, etc.
     zone_kitchen_top3 = {}
     try:
-        # cancellation_processor.build_kitchen_zone_breakdown returns per-zone df
         from cancellation_processor import build_kitchen_zone_breakdown
         import pandas as pd
-
-        # Reconstruct full df from CSV just for the top-3 — lightweight reparse
         import io
-        import pandas as pd
+
         df_raw = pd.read_csv(io.BytesIO(csv_bytes), low_memory=False)
-        # Re-use the zone pivot if available to avoid re-processing
         for zone in ["North", "South", "West"]:
             kdf = build_kitchen_zone_breakdown(df_raw, zone)
             if not kdf.empty:
@@ -168,7 +163,7 @@ def run_pipeline(cookies, mode):
         log.info("  {} → {}".format(zone, result))
 
     log.info("Pipeline complete for {} mode.".format(mode.upper()))
-    return cookies
+    return session
 
 
 # ==============================================================================
@@ -205,11 +200,11 @@ def main():
     log.info("Modes to run: {}".format([m.upper() for m in modes_to_run]))
 
     # ── Login once ─────────────────────────────────────────────────────────────
-    cookies = get_cookies_with_retry()
+    session = get_session_with_retry()
 
     # ── Run pipeline for each mode ─────────────────────────────────────────────
     for m in modes_to_run:
-        cookies = run_pipeline(cookies, m)
+        session = run_pipeline(session, m)
 
     log.info("=" * 60)
     log.info("All done. {} pipeline(s) completed.".format(len(modes_to_run)))
