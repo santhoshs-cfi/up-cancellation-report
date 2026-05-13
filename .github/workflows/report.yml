@@ -42,5 +42,9 @@ jobs:
           path: |
             automation.log
             login_debug.png
+            login_step1_loaded.png
+            login_step2_email_filled.png
+            login_step3_pwd_visible.png
+            login_step4_success.png
           if-no-files-found: ignore
           retention-days: 7

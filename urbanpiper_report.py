@@ -112,37 +112,43 @@ def login_and_get_cookies():
         page = context.new_page()
 
         try:
-            # Navigate and wait for DOM ready
+            # Navigate to Atlas — redirects to login.urbanpiper.com two-step flow
             page.goto(config.ATLAS_LOGIN_URL, wait_until="domcontentloaded", timeout=30000)
-            log.info("Page DOM loaded. Waiting for email input...")
+            log.info("Page loaded. URL: {}".format(page.url))
+            page.screenshot(path="login_step1_loaded.png")
 
-            # Screenshot so we can see the page state on failure
-            page.screenshot(path="login_debug.png")
+            # ── Step 1: Wait for and fill email field ─────────────────────────
+            email_sel = (
+                "input[type=email], input[type=text][name=email], "
+                "input[name=email], input[name=username], "
+                "input[placeholder*=mail i], input[placeholder*=mobile i], "
+                "input[placeholder*=email i]"
+            )
+            page.wait_for_selector(email_sel, state="visible", timeout=30000)
+            log.info("Email field visible.")
+            page.locator(email_sel).first.fill(config.UP_EMAIL)
+            page.screenshot(path="login_step2_email_filled.png")
+            log.info("Email filled. Clicking continue...")
 
-            # Wait explicitly for any text/email input to appear (up to 30s)
-            email_locator = page.locator(
-                "input[type=email], input[type=text], input[name=email], "
-                "input[name=username], input[placeholder*=mail i], input[placeholder*=email i]"
-            ).first
-            email_locator.wait_for(state="visible", timeout=30000)
-            log.info("Email input found. Filling credentials...")
+            # Click the continue/submit button on the email step
+            page.locator(
+                "button[type=submit], input[type=submit]"
+            ).first.click()
 
-            email_locator.fill(config.UP_EMAIL)
+            # ── Step 2: Wait for password field (same URL, SPA transition) ────
+            log.info("Waiting for password field (URL: {})...".format(page.url))
+            page.wait_for_selector("input[type=password]", state="visible", timeout=30000)
+            page.screenshot(path="login_step3_pwd_visible.png")
+            log.info("Password field visible. Filling password...")
             page.locator("input[type=password]").first.fill(config.UP_PASSWORD)
 
-            # Click submit
-            submit = page.locator(
-                'button[type=submit], button:has-text("Login"), '
-                'button:has-text("Sign in"), button:has-text("Log in")'
-            ).first
-            submit.click()
+            # Submit password
+            page.locator("button[type=submit], input[type=submit]").first.click()
+            log.info("Clicked sign-in. Waiting for Atlas redirect...")
 
-            # Wait for redirect away from the login page (home / dashboard / reports)
-            page.wait_for_function(
-                "!window.location.pathname.startsWith('/login') && "
-                "!window.location.pathname === '/'",
-                timeout=30000
-            )
+            # Wait for redirect back to atlas.urbanpiper.com
+            page.wait_for_url("*atlas.urbanpiper.com*", timeout=30000)
+            page.screenshot(path="login_step4_success.png")
             log.info("Login successful! URL: {}".format(page.url))
 
         except Exception as e:
