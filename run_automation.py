@@ -8,8 +8,10 @@ Orchestrates the complete pipeline in one run:
   3. Poll until Atlas has finished generating it
   4. Download the CSV
   5. Process it: categorize cancellations, add zones, build pivot tables
-  6. Build per-zone Excel reports (North / South / West)
-  7. Email each zone's Excel to the configured recipient
+  6. Build per-zone CSV reports (all cancelled orders, filterable by Zone column)
+  7. Email each zone's CSV to the configured recipient
+     - Files <= 25 MB: attached directly
+     - Files >  25 MB: uploaded to Google Drive, link sent in email
 
 Usage (same modes as urbanpiper_report.py):
     python run_automation.py smart      # daily always; weekly on Mon; monthly on 1st
@@ -58,7 +60,7 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from cancellation_processor import process_csv
+    from cancellation_processor import process_csv, build_zone_summaries
 except ImportError as e:
     log.error("Could not import from cancellation_processor.py: {}".format(e))
     sys.exit(1)
@@ -127,40 +129,42 @@ def run_pipeline(session, mode):
 
     log.info("CSV ready — {:,} bytes | jobId={}".format(len(csv_bytes), job_id))
 
-    # ── Step 2: Process CSV → zone Excel files ─────────────────────────────────
+    # ── Step 2: Process CSV -> per-zone CSV files + pivots ─────────────────────
     log.info("Processing CSV...")
-    zone_excels, pivot_df, zone_pivot_df, total_orders, total_cancelled = process_csv(csv_bytes)
+    zone_csvs, pivot_df, zone_pivot_df, total_orders, total_cancelled = process_csv(csv_bytes)
 
-    log.info(
-        "Processing complete — {} total orders, {} cancelled.".format(
-            total_orders, total_cancelled
-        )
-    )
-    for zone, buf in zone_excels.items():
-        log.info("  {}: {:,} bytes Excel".format(zone, buf.tell() if hasattr(buf, 'tell') else 0))
-        buf.seek(0)   # rewind so email sender can read from start
+    log.info("Processing complete — {:,} total orders, {:,} cancelled.".format(
+        total_orders, total_cancelled
+    ))
+    for zone, buf in zone_csvs.items():
+        size_mb = len(buf.getvalue()) / (1024 * 1024)
+        log.info("  {}: {:.1f} MB CSV ({} via {})".format(
+            zone, size_mb,
+            "attachment" if size_mb < 25 else "Google Drive link",
+            "direct" if size_mb < 25 else "Drive upload",
+        ))
 
-    # ── Step 3: Build top-3 kitchen stores per zone (for email body) ───────────
-    zone_kitchen_top3 = {}
+    # ── Step 3: Build zone-specific summary text for email bodies ──────────────
+    log.info("Building zone summaries...")
     try:
-        from cancellation_processor import build_kitchen_zone_breakdown
-        import pandas as pd
         import io
-
+        import pandas as pd
         df_raw = pd.read_csv(io.BytesIO(csv_bytes), low_memory=False)
-        for zone in ["North", "South", "West"]:
-            kdf = build_kitchen_zone_breakdown(df_raw, zone)
-            if not kdf.empty:
-                zone_kitchen_top3[zone] = kdf.head(3).to_dict("records")
+        from cancellation_processor import add_zone_city, categorize_all, load_zone_mapping
+        zone_df = load_zone_mapping()
+        df_raw  = add_zone_city(df_raw, zone_df)
+        df_raw  = categorize_all(df_raw)
+        zone_summaries = build_zone_summaries(df_raw, pivot_df, zone_pivot_df)
     except Exception as e:
-        log.warning("Could not build kitchen top-3 for email body: {}".format(e))
+        log.warning("Could not build zone summaries for email body: {}".format(e))
+        zone_summaries = {}
 
     # ── Step 4: Email zone reports ─────────────────────────────────────────────
     log.info("Sending emails...")
-    results = send_all_zones(zone_excels, date_label, zone_kitchen_top3)
+    results = send_all_zones(zone_csvs, date_label, zone_summaries)
 
     for zone, result in results.items():
-        log.info("  {} → {}".format(zone, result))
+        log.info("  {} -> {}".format(zone, result))
 
     log.info("Pipeline complete for {} mode.".format(mode.upper()))
     return session
