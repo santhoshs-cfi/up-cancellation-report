@@ -6,25 +6,19 @@ Categorizes cancellations, adds zones, builds per-zone Excel files.
 
 Each Excel has 2 sheets:
   Sheet 1 - "Cancelled Orders"     : all cancelled rows across all zones
-                                      (~16K rows, filterable by Zone column)
-  Sheet 2 - "Cancellation Summary" : traffic-light color-coded category pivot
-                                      + zone breakdown + kitchen stores by zone
-
-Used by run_automation.py for headless/scheduled execution.
+  Sheet 2 - "Cancellation Summary" : clean pivot + zone breakdown + kitchen stores
 """
 
 import io
 import os
 import pandas as pd
 
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
 _SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 _MAPPING_FILE = os.path.join(_SCRIPT_DIR, "keyword_mapping.xlsx")
 _ZONE_FILE    = os.path.join(_SCRIPT_DIR, "zone_city_mapping.xlsx")
 
 ZONES = ["North", "South", "West"]
+ZONE_HEADER_COLORS = {"North": "#1F4E79", "South": "#375623", "West": "#7B2D2D"}
 
 CATEGORIES = [
     "Auto Cancellation",
@@ -34,22 +28,6 @@ CATEGORIES = [
     "Cancelled post MFR",
 ]
 
-# Traffic-light colors per category (bg, font)
-CATEGORY_COLORS = {
-    "Auto Cancellation":          ("#FAEEDA", "#633806"),
-    "Kitchen Cancellation":       ("#FCEBEB", "#791F1F"),
-    "Non Kitchen Cancellation":   ("#EAF3DE", "#27500A"),
-    "Post Dispatch Cancellation": ("#FBEAF0", "#72243E"),
-    "Cancelled post MFR":         ("#EEEDFE", "#3C3489"),
-    "Unmatched (Blank)":          ("#F1EFE8", "#444441"),
-}
-
-# Zone header accent colors (for kitchen section title)
-ZONE_HEADER_COLORS = {"North": "#1F4E79", "South": "#375623", "West": "#7B2D2D"}
-
-# ---------------------------------------------------------------------------
-# Default keywords (used if keyword_mapping.xlsx is missing)
-# ---------------------------------------------------------------------------
 _DEFAULT_PRIORITY_KITCHEN = [
     "could not confirm the order",
     "because your order was running late",
@@ -99,9 +77,6 @@ _DELAY_CONTEXT_MESSAGES = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Keyword loading
-# ---------------------------------------------------------------------------
 def load_keywords():
     if os.path.exists(_MAPPING_FILE):
         try:
@@ -126,9 +101,6 @@ def load_keywords():
     return _DEFAULT_PRIORITY_KITCHEN, _DEFAULT_KITCHEN, _DEFAULT_NON_KITCHEN, _DEFAULT_POST_DISPATCH
 
 
-# ---------------------------------------------------------------------------
-# Zone mapping
-# ---------------------------------------------------------------------------
 def load_zone_mapping():
     if os.path.exists(_ZONE_FILE):
         try:
@@ -163,25 +135,18 @@ def add_zone_city(df, zone_df):
     return merged[cols]
 
 
-# ---------------------------------------------------------------------------
-# Categorization
-# ---------------------------------------------------------------------------
 def categorize_row(row, priority_kw, non_kitchen_kw, kitchen_kw, post_dispatch_kw):
     if pd.isna(row["Order Cancelled Time"]):
         return ""
-
     cancel_reason = str(row.get("Order Cancel Reason", "") or "").strip()
     if cancel_reason == "14":
         return "Non Kitchen Cancellation"
-
     if not pd.isna(row["Dispatch Time"]):
         return "Post Dispatch Cancellation"
-
     if (not pd.isna(row.get("MFR Time")) and
             pd.isna(row["Dispatch Time"]) and
             str(row.get("Order Cancelled By", "") or "").strip().lower() == "aggregator"):
         return "Cancelled post MFR"
-
     if str(row.get("Order Cancelled By", "") or "").strip().lower() == "merchant":
         raw = row.get("Order Cancellation Message", "")
         msg = "" if (pd.isna(raw) or str(raw).strip().lower() in ("", "none", "nan")) else str(raw).strip()
@@ -189,15 +154,12 @@ def categorize_row(row, priority_kw, non_kitchen_kw, kitchen_kw, post_dispatch_k
             return "Kitchen Cancellation"
         if str(row.get("Order Cancel Reason", "") or "").strip().lower() == "item_out_of_stock":
             return "Kitchen Cancellation" if msg else "Auto Cancellation"
-
     text = (
         str(row.get("Order Cancellation Message", "") or "") + " " +
         str(row.get("Order Cancel Reason", "") or "")
     ).lower()
-
     if any(k in text for k in post_dispatch_kw):
         return "Post Dispatch Cancellation"
-
     if any(k in text for k in _DELAY_CONTEXT_MESSAGES):
         if not pd.isna(row["Order Creation Time"]):
             mins = (row["Order Cancelled Time"] - row["Order Creation Time"]).total_seconds() / 60
@@ -205,30 +167,25 @@ def categorize_row(row, priority_kw, non_kitchen_kw, kitchen_kw, post_dispatch_k
                 return "Non Kitchen Cancellation"
             return "Post Dispatch Cancellation" if not pd.isna(row.get("MFR Time")) else "Kitchen Cancellation"
         return "Non Kitchen Cancellation"
-
     if any(k in text for k in priority_kw):
         return "Kitchen Cancellation"
     if any(k in text for k in non_kitchen_kw):
         return "Non Kitchen Cancellation"
     if any(k in text for k in kitchen_kw):
         return "Kitchen Cancellation"
-
     if not pd.isna(row["Order Creation Time"]):
         mins = (row["Order Cancelled Time"] - row["Order Creation Time"]).total_seconds() / 60
         if mins <= 8:
             return "Auto Cancellation"
-
     return ""
 
 
 def categorize_all(df):
     priority_kw, kitchen_kw, non_kitchen_kw, post_dispatch_kw = load_keywords()
     print("Categorizing {} rows...".format(len(df)))
-
     for col in ["Order Creation Time", "MFR Time", "Dispatch Time", "Order Cancelled Time"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
-
     df["Cancellation Category"] = df.apply(
         lambda row: categorize_row(row, priority_kw, non_kitchen_kw, kitchen_kw, post_dispatch_kw),
         axis=1
@@ -238,15 +195,11 @@ def categorize_all(df):
     return df
 
 
-# ---------------------------------------------------------------------------
-# Pivot builders
-# ---------------------------------------------------------------------------
 def build_pivot(df):
     total_orders    = len(df)
     has_cancel_time = df["Order Cancelled Time"].notna()
     total_cancelled = int(has_cancel_time.sum())
     unmatched       = int((has_cancel_time & (df["Cancellation Category"] == "")).sum())
-
     rows = []
     for cat in CATEGORIES:
         count = int((df["Cancellation Category"] == cat).sum())
@@ -282,7 +235,6 @@ def build_zone_pivot(df):
         row["Grand Total"] = cat_grand
         row["Overall %"]   = round(cat_grand / total_all * 100, 2)
         rows.append(row)
-
     grand = {"Cancellation Category": "Grand Total"}
     for z in ZONES:
         z_total     = len(df[df["Zone"] == z])
@@ -292,7 +244,6 @@ def build_zone_pivot(df):
     grand["Grand Total"] = len(df)
     grand["Overall %"]   = round(int((df["Cancellation Category"] != "").sum()) / total_all * 100, 2)
     rows.append(grand)
-
     col_order = ["Cancellation Category"] + [c for z in ZONES for c in [z, "% " + z]] + ["Grand Total", "Overall %"]
     return pd.DataFrame(rows, columns=col_order)
 
@@ -305,243 +256,138 @@ def build_kitchen_zone_breakdown(df, zone):
     return breakdown.sort_values("Count", ascending=False).reset_index(drop=True)
 
 
-# ---------------------------------------------------------------------------
-# Format factory
-# ---------------------------------------------------------------------------
-def _make_formats(wb, zone=None):
-    """Create all xlsxwriter formats. Returns a dict keyed by purpose."""
-    zone_color = ZONE_HEADER_COLORS.get(zone, "#1F4E79") if zone else "#1F4E79"
+def _add_formats(wb, zone=None):
+    # Plain, no colours — bold where needed, thin borders, white background
     f = {}
-
-    # ── Sheet 1 header (blue) ─────────────────────────────────────────────────
-    f["s1_hdr"] = wb.add_format({
-        "bold": True, "bg_color": "#1F4E79", "font_color": "#FFFFFF",
-        "font_name": "Arial", "font_size": 10,
-        "align": "center", "valign": "vcenter", "border": 1,
-    })
-
-    # ── Sheet 2 section title bar (dark charcoal) ─────────────────────────────
-    f["sec_title"] = wb.add_format({
-        "bold": True, "bg_color": "#2C2C2A", "font_color": "#F1EFE8",
-        "font_name": "Arial", "font_size": 12,
-        "align": "left", "valign": "vcenter",
-    })
-
-    # ── Column headers (dark) ─────────────────────────────────────────────────
-    f["col_hdr"] = wb.add_format({
-        "bold": True, "bg_color": "#444441", "font_color": "#D3D1C7",
-        "font_name": "Arial", "font_size": 10,
-        "align": "center", "valign": "vcenter", "border": 1,
-    })
-    f["col_hdr_l"] = wb.add_format({
-        "bold": True, "bg_color": "#444441", "font_color": "#D3D1C7",
-        "font_name": "Arial", "font_size": 10,
-        "align": "left", "valign": "vcenter", "border": 1,
-    })
-
-    # ── Total rows (dark) ─────────────────────────────────────────────────────
-    f["tot"] = wb.add_format({
-        "bold": True, "bg_color": "#2C2C2A", "font_color": "#FFFFFF",
-        "font_name": "Arial", "font_size": 10,
-        "align": "center", "valign": "vcenter", "border": 1,
-        "num_format": "#,##0",
-    })
-    f["tot_l"] = wb.add_format({
-        "bold": True, "bg_color": "#2C2C2A", "font_color": "#FFFFFF",
-        "font_name": "Arial", "font_size": 10,
-        "align": "left", "valign": "vcenter", "border": 1,
-    })
-    f["tot_pct"] = wb.add_format({
-        "bold": True, "bg_color": "#2C2C2A", "font_color": "#FFFFFF",
-        "font_name": "Arial", "font_size": 10,
-        "align": "center", "valign": "vcenter", "border": 1,
-        "num_format": '0.00"%"',
-    })
-
-    # ── Kitchen section title (zone color) ────────────────────────────────────
-    f["zone_title"] = wb.add_format({
-        "bold": True, "bg_color": zone_color, "font_color": "#FFFFFF",
-        "font_name": "Arial", "font_size": 11,
-        "align": "left", "valign": "vcenter",
-    })
-
-    # ── Kitchen alternating rows ───────────────────────────────────────────────
-    f["k_cat"]   = wb.add_format({"font_name": "Arial", "font_size": 10, "border": 1, "align": "left"})
-    f["k_cat_a"] = wb.add_format({"font_name": "Arial", "font_size": 10, "border": 1, "align": "left",   "bg_color": "#F1EFE8"})
-    f["k_num"]   = wb.add_format({"font_name": "Arial", "font_size": 10, "border": 1, "align": "center", "num_format": "#,##0"})
-    f["k_num_a"] = wb.add_format({"font_name": "Arial", "font_size": 10, "border": 1, "align": "center", "num_format": "#,##0", "bg_color": "#F1EFE8"})
-
-    # ── Per-category traffic-light formats ────────────────────────────────────
-    for cat, (bg, fg) in CATEGORY_COLORS.items():
-        key = cat.replace(" ", "_")
-        f[key + "_l"] = wb.add_format({
-            "bg_color": bg, "font_color": fg, "font_name": "Arial", "font_size": 10,
-            "align": "left", "valign": "vcenter", "border": 1,
-        })
-        f[key + "_c"] = wb.add_format({
-            "bg_color": bg, "font_color": fg, "font_name": "Arial", "font_size": 10,
-            "align": "center", "valign": "vcenter", "border": 1,
-            "num_format": "#,##0",
-        })
-        f[key + "_p"] = wb.add_format({
-            "bg_color": bg, "font_color": fg, "font_name": "Arial", "font_size": 10,
-            "align": "center", "valign": "vcenter", "border": 1,
-            "num_format": '0.00"%"',
-        })
-
+    f["hdr"]   = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"align":"center","valign":"vcenter","border":1})
+    f["hdr_l"] = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"align":"left","valign":"vcenter","border":1})
+    f["body"]  = wb.add_format({"font_name":"Arial","font_size":10,"border":1,"align":"center","valign":"vcenter"})
+    f["body_l"]= wb.add_format({"font_name":"Arial","font_size":10,"border":1,"align":"left","valign":"vcenter"})
+    f["alt"]   = f["body"]
+    f["alt_l"] = f["body_l"]
+    f["title"] = wb.add_format({"bold":True,"font_name":"Arial","font_size":12,"align":"left","valign":"vcenter","bottom":2})
+    f["title2"]= wb.add_format({"bold":True,"font_name":"Arial","font_size":11,"align":"left","valign":"vcenter","bottom":2})
+    f["title3"]= wb.add_format({"bold":True,"font_name":"Arial","font_size":11,"align":"left","valign":"vcenter","bottom":2})
+    f["tot"]   = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"border":1,"align":"center","valign":"vcenter","num_format":"#,##0"})
+    f["tot_l"] = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"border":1,"align":"left","valign":"vcenter"})
+    f["pctf"]  = wb.add_format({"font_name":"Arial","font_size":10,"border":1,"align":"center","num_format":'0.00"%"'})
+    f["pcta"]  = f["pctf"]
+    f["pctt"]  = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"border":1,"align":"center","num_format":'0.00"%"'})
+    f["num_b"] = wb.add_format({"font_name":"Arial","font_size":10,"border":1,"align":"center","num_format":"#,##0"})
+    f["num_a"] = f["num_b"]
+    f["num_t"] = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"border":1,"align":"center","num_format":"#,##0"})
     return f
 
 
-def _cat_fmts(f, cat):
-    """Return (label_fmt, count_fmt, pct_fmt) for a category row."""
-    key = cat.replace(" ", "_")
-    if key + "_l" in f:
-        return f[key + "_l"], f[key + "_c"], f[key + "_p"]
-    # fallback: gray
-    fb = f["Unmatched_(Blank)_l"], f["Unmatched_(Blank)_c"], f["Unmatched_(Blank)_p"]
-    return fb
-
-
-# ---------------------------------------------------------------------------
-# Excel builder — 2 sheets per zone
-# ---------------------------------------------------------------------------
 def build_zonal_excel(all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zone):
-    """
-    Sheet 1 - Cancelled Orders    : all cancelled rows (all zones, ~16K rows)
-    Sheet 2 - Cancellation Summary: traffic-light pivot + zone table + kitchen
-    """
     output = io.BytesIO()
     writer = pd.ExcelWriter(output, engine="xlsxwriter")
     wb     = writer.book
-    f      = _make_formats(wb, zone)
+    f      = _add_formats(wb, zone)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Sheet 1 — Cancelled Orders
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── Sheet 1: Cancelled Orders ─────────────────────────────────────────────
     all_cancelled_df.to_excel(writer, sheet_name="Cancelled Orders", index=False)
     ws1 = writer.sheets["Cancelled Orders"]
     for c, col_name in enumerate(all_cancelled_df.columns):
-        ws1.write(0, c, col_name, f["s1_hdr"])
+        ws1.write(0, c, col_name, f["hdr"])
         w = max(len(str(col_name)), all_cancelled_df[col_name].astype(str).str.len().max())
         ws1.set_column(c, c, min(w + 2, 40))
     ws1.freeze_panes(1, 0)
     ws1.autofilter(0, 0, len(all_cancelled_df), len(all_cancelled_df.columns) - 1)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Sheet 2 — Cancellation Summary
-    # ══════════════════════════════════════════════════════════════════════════
+    # ── Sheet 2: Cancellation Summary ─────────────────────────────────────────
     ws2 = wb.add_worksheet("Cancellation Summary")
     r   = 0
 
-    # ── Section 1: Category pivot ─────────────────────────────────────────────
-    ws2.merge_range(r, 0, r, 3, "  Cancellation Category Summary", f["sec_title"])
-    ws2.set_row(r, 30); r += 1
-
-    ws2.write(r, 0, "Cancellation Category", f["col_hdr_l"])
-    ws2.write(r, 1, "Count",                 f["col_hdr"])
-    ws2.write(r, 2, "% of Total Orders",     f["col_hdr"])
-    ws2.write(r, 3, "% of Total Cancelled",  f["col_hdr"])
+    # Section 1: Category pivot
+    ws2.merge_range(r, 0, r, 3, "  Cancellation Category Summary", f["title"])
+    ws2.set_row(r, 28); r += 1
+    for c, h in enumerate(["Cancellation Category", "Count", "% of Total Orders", "% of Total Cancelled"]):
+        ws2.write(r, c, h, f["hdr"] if c > 0 else f["hdr_l"])
     ws2.set_row(r, 20); r += 1
 
-    for _, prow in pivot_df.iterrows():
-        cat     = str(prow["Cancellation Category"])
-        count   = prow["Count"]
-        pct_ord = prow["% of Total Orders"]
-        pct_can = prow["% of Total Cancelled"]
-
-        is_total = cat in ("Total Cancelled", "Total Orders")
-
-        if is_total:
+    totals_set = {"Total Cancelled", "Total Orders"}
+    for ri, prow in enumerate(pivot_df.itertuples(index=False)):
+        cat, count, pct_ord, pct_can = prow
+        is_tot = str(cat) in totals_set
+        even   = (ri % 2 == 0)
+        if is_tot:
             ws2.write(r, 0, cat,   f["tot_l"])
             ws2.write(r, 1, count, f["tot"])
-            ws2.write(r, 2, float(pct_ord) if str(pct_ord) != "-" else "", f["tot_pct"])
-            ws2.write(r, 3, float(pct_can) if str(pct_can) != "-" else "", f["tot_pct"])
+            ws2.write(r, 2, float(pct_ord) if str(pct_ord) != "-" else "", f["pctt"])
+            ws2.write(r, 3, float(pct_can) if str(pct_can) != "-" else "", f["pctt"])
         else:
-            fl, fc, fp = _cat_fmts(f, cat)
-            ws2.write(r, 0, cat,   fl)
-            ws2.write(r, 1, count, fc)
-            ws2.write(r, 2, float(pct_ord), fp)
+            ws2.write(r, 0, cat,            f["alt_l"]  if even else f["body_l"])
+            ws2.write(r, 1, count,          f["num_a"]  if even else f["num_b"])
+            ws2.write(r, 2, float(pct_ord), f["pcta"]   if even else f["pctf"])
             pct_can_val = float(pct_can) if str(pct_can) != "-" else "-"
-            ws2.write(r, 3, pct_can_val, fp)
-        ws2.set_row(r, 18)
-        r += 1
+            ws2.write(r, 3, pct_can_val,    f["pcta"]   if even else f["pctf"])
+        ws2.set_row(r, 18); r += 1
 
-    r += 1  # gap
+    r += 1
 
-    # ── Section 2: Zone-wise breakdown ────────────────────────────────────────
+    # Section 2: Zone breakdown
     zone_hdrs = (["Cancellation Category"] +
                  [c for z in ZONES for c in [z, "% " + z]] +
                  ["Grand Total", "Overall %"])
-    n_cols = len(zone_hdrs)
-
-    ws2.merge_range(r, 0, r, n_cols - 1,
-                    "  Zone-wise Cancellation Breakdown", f["sec_title"])
-    ws2.set_row(r, 30); r += 1
-
+    ws2.merge_range(r, 0, r, len(zone_hdrs) - 1, "  Zone-wise Cancellation Breakdown", f["title2"])
+    ws2.set_row(r, 24); r += 1
     for c, h in enumerate(zone_hdrs):
-        fmt = f["col_hdr_l"] if c == 0 else f["col_hdr"]
-        ws2.write(r, c, h, fmt)
+        ws2.write(r, c, h, f["hdr"] if c > 0 else f["hdr_l"])
     ws2.set_row(r, 20); r += 1
 
-    for _, zrow in zone_pivot_df.iterrows():
-        cat      = str(zrow["Cancellation Category"])
-        is_grand = cat == "Grand Total"
-
+    for ri, zrow in enumerate(zone_pivot_df.itertuples(index=False)):
+        vals     = list(zrow)
+        cat      = vals[0]
+        is_grand = str(cat) == "Grand Total"
+        even     = (ri % 2 == 0)
+        ws2.write(r, 0, cat, f["tot_l"] if is_grand else (f["alt_l"] if even else f["body_l"]))
+        col = 1; vi = 1
+        for _ in ZONES:
+            cnt_v = vals[vi]; vi += 1
+            pct_v = float(vals[vi]); vi += 1
+            if is_grand:
+                ws2.write(r, col, cnt_v, f["num_t"]); ws2.write(r, col+1, pct_v, f["pctt"])
+            else:
+                ws2.write(r, col, cnt_v, f["num_a"] if even else f["num_b"])
+                ws2.write(r, col+1, pct_v, f["pcta"] if even else f["pctf"])
+            col += 2
+        grand_cnt = vals[vi]; vi += 1; overall_pct = float(vals[vi])
         if is_grand:
-            ws2.write(r, 0, cat, f["tot_l"])
-            col = 1
-            for z in ZONES:
-                ws2.write(r, col,     int(zrow[z]),          f["tot"])
-                ws2.write(r, col + 1, float(zrow["% " + z]), f["tot_pct"])
-                col += 2
-            ws2.write(r, col,     int(zrow["Grand Total"]),   f["tot"])
-            ws2.write(r, col + 1, float(zrow["Overall %"]),   f["tot_pct"])
+            ws2.write(r, col, grand_cnt, f["num_t"]); ws2.write(r, col+1, overall_pct, f["pctt"])
         else:
-            fl, fc, fp = _cat_fmts(f, cat)
-            ws2.write(r, 0, cat, fl)
-            col = 1
-            for z in ZONES:
-                ws2.write(r, col,     int(zrow[z]),          fc)
-                ws2.write(r, col + 1, float(zrow["% " + z]), fp)
-                col += 2
-            ws2.write(r, col,     int(zrow["Grand Total"]),   fc)
-            ws2.write(r, col + 1, float(zrow["Overall %"]),   fp)
-        ws2.set_row(r, 18)
-        r += 1
+            ws2.write(r, col, grand_cnt, f["num_a"] if even else f["num_b"])
+            ws2.write(r, col+1, overall_pct, f["pcta"] if even else f["pctf"])
+        ws2.set_row(r, 18); r += 1
 
-    r += 1  # gap
+    r += 1
 
-    # ── Section 3: Kitchen cancellation by store (zone-specific) ─────────────
+    # Section 3: Kitchen by store
     ws2.merge_range(r, 0, r, 1,
-                    "  Kitchen Cancellation by Store - {} Zone".format(zone),
-                    f["zone_title"])
-    ws2.set_row(r, 26); r += 1
-
-    ws2.write(r, 0, "Store Name", f["col_hdr_l"])
-    ws2.write(r, 1, "Count",      f["col_hdr"])
+        "  Kitchen Cancellation by Store - {} Zone".format(zone), f["title3"])
+    ws2.set_row(r, 24); r += 1
+    ws2.write(r, 0, "Store Name", f["hdr_l"])
+    ws2.write(r, 1, "Count",      f["hdr"])
     ws2.set_row(r, 20); r += 1
-
-    for ki, krow in kitchen_df.iterrows():
+    for ki, krow in enumerate(kitchen_df.itertuples(index=False)):
+        store, count = krow
         even = (ki % 2 == 0)
-        ws2.write(r, 0, krow["Store Name"], f["k_cat_a"] if even else f["k_cat"])
-        ws2.write(r, 1, int(krow["Count"]), f["k_num_a"] if even else f["k_num"])
-        ws2.set_row(r, 17)
-        r += 1
-
+        ws2.write(r, 0, store, f["alt_l"] if even else f["body_l"])
+        ws2.write(r, 1, count, f["num_a"] if even else f["num_b"])
+        ws2.set_row(r, 17); r += 1
     total_kitchen = int(kitchen_df["Count"].sum()) if not kitchen_df.empty else 0
     ws2.write(r, 0, "Grand Total", f["tot_l"])
-    ws2.write(r, 1, total_kitchen, f["tot"])
+    ws2.write(r, 1, total_kitchen, f["num_t"])
 
-    # ── Column widths ─────────────────────────────────────────────────────────
-    ws2.set_column(0, 0, 34)   # Category / Store Name
-    ws2.set_column(1, 1, 12)   # Count / North
-    ws2.set_column(2, 2, 12)   # % of Orders / % North
-    ws2.set_column(3, 3, 14)   # % of Cancelled / South
-    ws2.set_column(4, 4, 12)   # % South
-    ws2.set_column(5, 5, 12)   # West
-    ws2.set_column(6, 6, 12)   # % West
-    ws2.set_column(7, 7, 13)   # Grand Total
-    ws2.set_column(8, 8, 11)   # Overall %
+    ws2.set_column(0, 0, 34)
+    ws2.set_column(1, 1, 12)
+    ws2.set_column(2, 2, 14)
+    ws2.set_column(3, 3, 14)
+    ws2.set_column(4, 4, 12)
+    ws2.set_column(5, 5, 14)
+    ws2.set_column(6, 6, 12)
+    ws2.set_column(7, 7, 14)
+    ws2.set_column(8, 8, 12)
     ws2.freeze_panes(1, 0)
 
     writer.close()
@@ -549,19 +395,7 @@ def build_zonal_excel(all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zon
     return output
 
 
-# ---------------------------------------------------------------------------
-# Main entry point: raw CSV bytes -> dict of {zone: BytesIO Excel}
-# ---------------------------------------------------------------------------
 def process_csv(csv_bytes):
-    """
-    Takes raw CSV bytes from UrbanPiper.
-    Returns:
-        zone_excels     - dict {zone: BytesIO Excel}
-        pivot_df        - overall cancellation category pivot
-        zone_pivot_df   - zone-wise breakdown pivot
-        total_orders    - int
-        total_cancelled - int
-    """
     print("Loading CSV data...")
     df = pd.read_csv(io.BytesIO(csv_bytes), low_memory=False)
     print("Loaded {} rows".format(len(df)))
@@ -578,7 +412,6 @@ def process_csv(csv_bytes):
         export_df[col] = export_df[col].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
     export_df = export_df.fillna("")
 
-    # Sheet 1: ALL cancelled orders across all zones
     all_cancelled_df = export_df[
         export_df["Cancellation Category"] != ""
     ].reset_index(drop=True)
