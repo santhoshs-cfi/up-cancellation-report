@@ -47,6 +47,7 @@ jobs:
           NORTH_EMAIL:       ${{ secrets.NORTH_EMAIL }}
           SOUTH_EMAIL:       ${{ secrets.SOUTH_EMAIL }}
           WEST_EMAIL:        ${{ secrets.WEST_EMAIL }}
+          TEST_EMAIL:        ${{ secrets.TEST_EMAIL }}
         run: python run_automation.py ${{ github.event.inputs.mode || 'smart' }}
 
       - name: Upload logs on failure

@@ -146,9 +146,10 @@ def run_pipeline(session, mode):
     except Exception as e:
         log.warning("Could not build kitchen top-3: {}".format(e))
 
-    # Step 4: Send emails
+    # Step 4: Send emails (pass pivot tables for inline body display)
     log.info("Sending emails...")
-    results = send_all_zones(zone_excels, date_label, zone_kitchen_top3)
+    results = send_all_zones(zone_excels, date_label, zone_kitchen_top3,
+                             pivot_df=pivot_df, zone_pivot_df=zone_pivot_df, mode=mode)
     for zone, result in results.items():
         log.info("  {} -> {}".format(zone, result))
 

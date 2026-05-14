@@ -186,14 +186,63 @@ def _upload_to_drive(creds, excel_bytes, filename):
 
 
 # ==============================================================================
+#  PLAIN-TEXT TABLE BUILDERS (for email body)
+# ==============================================================================
+
+def _fmt_summary_table(pivot_df):
+    """Formats the cancellation category pivot as a plain-text table."""
+    lines = []
+    lines.append("{:<30} {:>8} {:>12} {:>14}".format(
+        "Category", "Count", "% of Orders", "% Cancelled"))
+    lines.append("-" * 68)
+    for _, row in pivot_df.iterrows():
+        cat   = str(row["Cancellation Category"])
+        count = "{:,}".format(int(row["Count"]))
+        p_ord = row["% of Total Orders"]
+        p_can = row["% of Total Cancelled"]
+        pct_o = "{:.2f}%".format(float(p_ord)) if str(p_ord) != "-" else "-"
+        pct_c = "{:.2f}%".format(float(p_can)) if str(p_can) != "-" else "-"
+        lines.append("{:<30} {:>8} {:>12} {:>14}".format(cat, count, pct_o, pct_c))
+    return "\n".join(lines)
+
+
+def _fmt_zone_table(zone_pivot_df, zones=("North", "South", "West")):
+    """Formats the zone-wise breakdown pivot as a plain-text table."""
+    lines = []
+    # Header
+    hdr = "{:<30}".format("Category")
+    for z in zones:
+        hdr += " {:>8} {:>8}".format(z, "%" + z)
+    hdr += " {:>12} {:>9}".format("Grand Total", "Overall%")
+    lines.append(hdr)
+    lines.append("-" * (30 + len(zones) * 17 + 23))
+    for _, row in zone_pivot_df.iterrows():
+        cat = str(row["Cancellation Category"])
+        line = "{:<30}".format(cat)
+        for z in zones:
+            cnt = "{:,}".format(int(row.get(z, 0)))
+            pct = "{:.2f}%".format(float(row.get("% " + z, 0)))
+            line += " {:>8} {:>8}".format(cnt, pct)
+        gt  = "{:,}".format(int(row.get("Grand Total", 0)))
+        op  = "{:.2f}%".format(float(row.get("Overall %", 0)))
+        line += " {:>12} {:>9}".format(gt, op)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+# ==============================================================================
 #  SEND EMAIL
 # ==============================================================================
 
-def send_zone_email(to_email, zone, excel_bytes, filename, date_str, top3_stores=None, creds=None):
+def send_zone_email(to_email, zone, excel_bytes, filename, date_str,
+                    top3_stores=None, creds=None, pivot_df=None, zone_pivot_df=None,
+                    mode="daily"):
     """
     Sends a zone cancellation report Excel.
     - Attaches directly if <= 25 MB
     - Uploads to Google Drive and sends link if > 25 MB
+    - Includes category summary + zone breakdown tables in email body
+    - mode: daily / weekly / monthly — used in subject line
     """
     from googleapiclient.discovery import build
 
@@ -213,14 +262,43 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str, top3_stores
         log.info("File exceeds 25 MB - uploading to Google Drive.")
         drive_link = _upload_to_drive(creds, excel_bytes, filename)
 
-    # ── Email body ─────────────────────────────────────────────────────────────
+    # ── Build inline tables ────────────────────────────────────────────────────
+    summary_block = ""
+    if pivot_df is not None:
+        try:
+            summary_block = (
+                "\n" + "=" * 68 + "\n"
+                "CANCELLATION CATEGORY SUMMARY\n"
+                + "=" * 68 + "\n"
+                + _fmt_summary_table(pivot_df)
+                + "\n"
+            )
+        except Exception as e:
+            log.warning("Could not build summary table for email body: {}".format(e))
+
+    zone_block = ""
+    if zone_pivot_df is not None:
+        try:
+            zone_block = (
+                "\n" + "=" * 68 + "\n"
+                "ZONE-WISE CANCELLATION BREAKDOWN\n"
+                + "=" * 68 + "\n"
+                + _fmt_zone_table(zone_pivot_df)
+                + "\n"
+            )
+        except Exception as e:
+            log.warning("Could not build zone table for email body: {}".format(e))
+
     top3_block = ""
     if top3_stores:
         lines = [
             "  {}. {} - {}".format(i + 1, s.get("Store Name", ""), s.get("Count", ""))
             for i, s in enumerate(top3_stores[:3])
         ]
-        top3_block = "\nTop Kitchen Cancellation Stores:\n" + "\n".join(lines) + "\n"
+        top3_block = (
+            "\nTop Kitchen Cancellation Stores ({} Zone):\n".format(zone)
+            + "\n".join(lines) + "\n"
+        )
 
     if use_drive:
         delivery_note = (
@@ -234,21 +312,26 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str, top3_stores
     body = (
         "Hi Team,\n\n"
         "Please find the {zone} Zone Cancellation Report for {date}.\n"
-        "\nThe report contains 2 sheets:\n"
-        "  - Sheet 1 (Cancelled Orders): all cancelled orders across all zones\n"
-        "    Filter by the 'Zone' column to view {zone} zone data only.\n"
-        "  - Sheet 2 (Cancellation Summary): category breakdown, zone pivot,\n"
-        "    and top kitchen cancellation stores for {zone} zone.\n"
+        "{delivery}"
+        "{summary}"
+        "{zone_table}"
         "{top3}"
-        "{delivery}\n"
-        "This is an automated report. Do not reply to this email.\n"
-    ).format(zone=zone, date=date_str, top3=top3_block, delivery=delivery_note)
+        "\nThis is an automated report. Do not reply to this email.\n"
+    ).format(
+        zone=zone, date=date_str,
+        delivery=delivery_note,
+        summary=summary_block,
+        zone_table=zone_block,
+        top3=top3_block,
+    )
 
     # ── MIME message ───────────────────────────────────────────────────────────
+    mode_label = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly",
+                  "test": "Daily"}.get(mode.lower(), "Daily")
     msg = MIMEMultipart()
     msg["To"]      = to_email
-    msg["Subject"] = "[{zone} Zone] Cancellation Report - {date}".format(
-        zone=zone, date=date_str)
+    msg["Subject"] = "[{zone} Zone] {label} Cancellation Report - {date}".format(
+        zone=zone, label=mode_label, date=date_str)
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     if not use_drive:
@@ -282,11 +365,22 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str, top3_stores
 #  SEND ALL ZONES
 # ==============================================================================
 
-def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None):
-    """Sends Excel reports to all zones. Builds credentials once, reuses."""
+def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None,
+                   pivot_df=None, zone_pivot_df=None, mode="daily"):
+    """Sends Excel reports to all zones. Builds credentials once, reuses.
+
+    pivot_df and zone_pivot_df are included as plain-text tables in the body.
+    mode (daily/weekly/monthly) is used in the email subject line.
+    If TEST_EMAIL env var is set, every zone report is also sent to that
+    address. Remove the secret from GitHub when testing is done.
+    """
     email_cfg         = load_email_config()
     zone_kitchen_top3 = zone_kitchen_top3 or {}
     creds             = _get_credentials()
+    test_email        = os.environ.get("TEST_EMAIL", "").strip()
+
+    if test_email:
+        log.info("TEST_EMAIL is set - all zone reports will also go to {}.".format(test_email))
 
     results = {}
     for zone, excel_buf in zone_excels.items():
@@ -302,10 +396,21 @@ def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None):
         top3 = zone_kitchen_top3.get(zone, [])
 
         try:
-            send_zone_email(to_email, zone, excel_buf, filename, date_str, top3, creds)
+            send_zone_email(to_email, zone, excel_buf, filename, date_str,
+                            top3, creds, pivot_df, zone_pivot_df, mode)
             results[zone] = "sent -> {}".format(to_email)
         except Exception as e:
             log.error("Failed to send {} zone email: {}".format(zone, e))
             results[zone] = "FAILED: {}".format(e)
+
+        # Also send to test email if configured
+        if test_email and test_email != to_email:
+            try:
+                excel_buf.seek(0)
+                send_zone_email(test_email, zone, excel_buf, filename, date_str,
+                                top3, creds, pivot_df, zone_pivot_df, mode)
+                log.info("Test copy sent to {} ({} zone).".format(test_email, zone))
+            except Exception as e:
+                log.error("Failed to send test copy for {} zone: {}".format(zone, e))
 
     return results
