@@ -1,11 +1,11 @@
 """
 Email Sender
 ============
-Sends per-zone cancellation report CSV files via Gmail OAuth.
+Sends per-zone cancellation report Excel files via Gmail OAuth.
 
-If a CSV attachment exceeds SIZE_LIMIT_BYTES (25 MB), the file is uploaded
-to Google Drive (folder "UrbanPiper Reports") and a view/download link is
-sent in the email body instead.
+If an attachment exceeds SIZE_LIMIT_BYTES (25 MB), the file is uploaded
+to Google Drive (folder "UrbanPiper Reports") and a download link is sent
+in the email body. Old Drive files are auto-deleted after 90 days.
 
 Credentials come from environment variables (GitHub Secrets):
     GMAIL_CREDENTIALS  - contents of credentials.json  (JSON string)
@@ -45,11 +45,6 @@ SIZE_LIMIT_BYTES = 25 * 1024 * 1024   # 25 MB
 # ==============================================================================
 
 def load_email_config():
-    """
-    Priority order:
-      1. NORTH_EMAIL / SOUTH_EMAIL / WEST_EMAIL env vars (GitHub Secrets)
-      2. email_config.json on disk (local dev fallback)
-    """
     north = os.environ.get("NORTH_EMAIL", "")
     south = os.environ.get("SOUTH_EMAIL", "")
     west  = os.environ.get("WEST_EMAIL",  "")
@@ -87,7 +82,6 @@ def load_email_config():
 # ==============================================================================
 
 def _get_credentials():
-    """Returns google.oauth2.credentials.Credentials with Gmail + Drive scopes."""
     try:
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
@@ -112,9 +106,7 @@ def _get_credentials():
     else:
         token_path = os.path.join(_SCRIPT_DIR, "token.json")
         if not os.path.exists(token_path):
-            raise FileNotFoundError(
-                "Gmail not authorized. Run: python authorize_gmail.py"
-            )
+            raise FileNotFoundError("Gmail not authorized. Run: python authorize_gmail.py")
         log.info("Loading credentials from local token.json.")
         creds = Credentials.from_authorized_user_file(token_path, _GMAIL_SCOPES)
         if creds.expired and creds.refresh_token:
@@ -131,7 +123,6 @@ def _get_credentials():
 # ==============================================================================
 
 def _get_or_create_drive_folder(drive, folder_name):
-    """Return the Drive folder ID, creating it if it doesn't exist."""
     q = (
         "name='{}' and mimeType='application/vnd.google-apps.folder'"
         " and trashed=false"
@@ -148,7 +139,7 @@ def _get_or_create_drive_folder(drive, folder_name):
     return folder["id"]
 
 
-def _cleanup_old_drive_files(drive, folder_id, days_to_keep):
+def _cleanup_old_drive_files(drive, folder_id, days_to_keep=90):
     """Delete files in the Drive folder older than days_to_keep days."""
     from datetime import datetime, timedelta, timezone
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days_to_keep)).isoformat()
@@ -159,37 +150,31 @@ def _cleanup_old_drive_files(drive, folder_id, days_to_keep):
         drive.files().delete(fileId=f["id"]).execute()
         log.info("Deleted old Drive file: {} (created {})".format(f["name"], f["createdTime"]))
     if old_files:
-        log.info("Cleaned up {} old file(s) from Drive.".format(len(old_files)))
+        log.info("Cleaned up {} old Drive file(s).".format(len(old_files)))
 
 
-def _upload_to_drive(creds, csv_bytes, filename, days_to_keep=90):
-    """
-    Uploads the CSV BytesIO to Google Drive under 'UrbanPiper Reports'.
-    Sets 'anyone with link can view' permission.
-    Auto-deletes files older than days_to_keep.
-    Returns the webViewLink.
-    """
+def _upload_to_drive(creds, excel_bytes, filename):
+    """Upload Excel to Google Drive, set public link, auto-clean old files. Returns link."""
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
 
     drive     = build("drive", "v3", credentials=creds)
     folder_id = _get_or_create_drive_folder(drive, "UrbanPiper Reports")
 
-    # Clean up old files to save storage
-    _cleanup_old_drive_files(drive, folder_id, days_to_keep)
+    _cleanup_old_drive_files(drive, folder_id, days_to_keep=90)
 
-    csv_bytes.seek(0)
+    excel_bytes.seek(0)
     media = MediaIoBaseUpload(
-        csv_bytes,
-        mimetype="text/csv",
+        excel_bytes,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         resumable=True,
     )
-    file_meta = {"name": filename, "parents": [folder_id]}
-    uploaded  = drive.files().create(
-        body=file_meta, media_body=media, fields="id,webViewLink"
+    uploaded = drive.files().create(
+        body={"name": filename, "parents": [folder_id]},
+        media_body=media,
+        fields="id,webViewLink"
     ).execute()
 
-    # Anyone with the link can view (no sign-in required)
     drive.permissions().create(
         fileId=uploaded["id"],
         body={"type": "anyone", "role": "reader"},
@@ -204,11 +189,11 @@ def _upload_to_drive(creds, csv_bytes, filename, days_to_keep=90):
 #  SEND EMAIL
 # ==============================================================================
 
-def send_zone_email(to_email, zone, csv_bytes, filename, date_str, summary_text="", creds=None):
+def send_zone_email(to_email, zone, excel_bytes, filename, date_str, top3_stores=None, creds=None):
     """
-    Sends a zone cancellation report as a CSV attachment.
-    - Attaches the CSV directly if <= 25 MB
-    - Uploads to Google Drive and sends a link if > 25 MB
+    Sends a zone cancellation report Excel.
+    - Attaches directly if <= 25 MB
+    - Uploads to Google Drive and sends link if > 25 MB
     """
     from googleapiclient.discovery import build
 
@@ -217,55 +202,61 @@ def send_zone_email(to_email, zone, csv_bytes, filename, date_str, summary_text=
 
     gmail = build("gmail", "v1", credentials=creds)
 
-    # ── Check file size ────────────────────────────────────────────────────────
-    csv_data  = csv_bytes.getvalue()
-    size_mb   = len(csv_data) / (1024 * 1024)
-    log.info("Preparing {} — {:.1f} MB".format(filename, size_mb))
+    excel_data = excel_bytes.getvalue()
+    size_mb    = len(excel_data) / (1024 * 1024)
+    log.info("Preparing {} - {:.1f} MB".format(filename, size_mb))
 
-    use_drive  = len(csv_data) >= SIZE_LIMIT_BYTES
+    use_drive  = len(excel_data) >= SIZE_LIMIT_BYTES
     drive_link = None
 
     if use_drive:
-        log.info("File exceeds 25 MB — uploading to Google Drive instead.")
-        drive_link = _upload_to_drive(creds, csv_bytes, filename)
+        log.info("File exceeds 25 MB - uploading to Google Drive.")
+        drive_link = _upload_to_drive(creds, excel_bytes, filename)
 
-    # ── Build email body ───────────────────────────────────────────────────────
+    # ── Email body ─────────────────────────────────────────────────────────────
+    top3_block = ""
+    if top3_stores:
+        lines = [
+            "  {}. {} - {}".format(i + 1, s.get("Store Name", ""), s.get("Count", ""))
+            for i, s in enumerate(top3_stores[:3])
+        ]
+        top3_block = "\nTop Kitchen Cancellation Stores:\n" + "\n".join(lines) + "\n"
+
     if use_drive:
         delivery_note = (
-            "NOTE: The CSV report is {:.1f} MB which exceeds Gmail's 25 MB limit.\n"
+            "\nThe report file is {:.1f} MB which exceeds Gmail's 25 MB limit.\n"
             "Download it directly from Google Drive (no sign-in required):\n"
-            "{}\n\n"
+            "{}\n"
         ).format(size_mb, drive_link)
     else:
-        delivery_note = "The CSV report is attached ({:.1f} MB).\n\n".format(size_mb)
+        delivery_note = "\nThe Excel report is attached ({:.1f} MB).\n".format(size_mb)
 
     body = (
         "Hi Team,\n\n"
-        "Please find the {zone} Zone Cancellation Report for {date}.\n\n"
-        "{delivery}"
-        "The attached CSV contains ALL cancelled orders across all zones.\n"
-        "Use the 'Zone' column to filter for {zone} zone data.\n\n"
-        "{summary}\n"
+        "Please find the {zone} Zone Cancellation Report for {date}.\n"
+        "\nThe report contains 2 sheets:\n"
+        "  - Sheet 1 (Cancelled Orders): all cancelled orders across all zones\n"
+        "    Filter by the 'Zone' column to view {zone} zone data only.\n"
+        "  - Sheet 2 (Cancellation Summary): category breakdown, zone pivot,\n"
+        "    and top kitchen cancellation stores for {zone} zone.\n"
+        "{top3}"
+        "{delivery}\n"
         "This is an automated report. Do not reply to this email.\n"
-    ).format(
-        zone=zone,
-        date=date_str,
-        delivery=delivery_note,
-        summary=summary_text,
-    )
+    ).format(zone=zone, date=date_str, top3=top3_block, delivery=delivery_note)
 
-    # ── Compose MIME message ───────────────────────────────────────────────────
-    subject = "[{zone} Zone] Cancellation Report - {date}".format(
-        zone=zone, date=date_str
-    )
+    # ── MIME message ───────────────────────────────────────────────────────────
     msg = MIMEMultipart()
     msg["To"]      = to_email
-    msg["Subject"] = subject
+    msg["Subject"] = "[{zone} Zone] Cancellation Report - {date}".format(
+        zone=zone, date=date_str)
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     if not use_drive:
-        attachment = MIMEBase("text", "csv")
-        attachment.set_payload(csv_data)
+        attachment = MIMEBase(
+            "application",
+            "vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        attachment.set_payload(excel_data)
         encoders.encode_base64(attachment)
         attachment.add_header(
             "Content-Disposition",
@@ -273,7 +264,6 @@ def send_zone_email(to_email, zone, csv_bytes, filename, date_str, summary_text=
         )
         msg.attach(attachment)
 
-    # ── Send ───────────────────────────────────────────────────────────────────
     raw    = base64.urlsafe_b64encode(
         msg.as_bytes(policy=email.policy.SMTP)
     ).decode("utf-8")
@@ -282,7 +272,8 @@ def send_zone_email(to_email, zone, csv_bytes, filename, date_str, summary_text=
     ).execute()
 
     log.info("Email sent to {} ({} zone) | ID: {} | Via: {}".format(
-        to_email, zone, result.get("id"), "Drive link" if use_drive else "attachment"
+        to_email, zone, result.get("id"),
+        "Drive link" if use_drive else "attachment"
     ))
     return result.get("id")
 
@@ -291,35 +282,27 @@ def send_zone_email(to_email, zone, csv_bytes, filename, date_str, summary_text=
 #  SEND ALL ZONES
 # ==============================================================================
 
-def send_all_zones(zone_csvs, date_str, zone_summaries=None):
-    """
-    Sends CSV reports to all three zones.
-    Builds credentials once, reuses for all zones + any Drive uploads.
-
-    Args:
-        zone_csvs     - dict {zone: BytesIO}
-        date_str      - human-readable date label for email subject/body
-        zone_summaries - dict {zone: str} with plain-text summary for each zone
-    """
-    email_cfg      = load_email_config()
-    zone_summaries = zone_summaries or {}
-    creds          = _get_credentials()   # build once, reuse for all zones + Drive
+def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None):
+    """Sends Excel reports to all zones. Builds credentials once, reuses."""
+    email_cfg         = load_email_config()
+    zone_kitchen_top3 = zone_kitchen_top3 or {}
+    creds             = _get_credentials()
 
     results = {}
-    for zone, csv_buf in zone_csvs.items():
+    for zone, excel_buf in zone_excels.items():
         to_email = email_cfg.get(zone, "")
         if not to_email:
             log.warning("Skipping {} zone - no email configured.".format(zone))
             results[zone] = "skipped (no email)"
             continue
 
-        filename = "{}_Cancellation_Report_{}.csv".format(
+        filename = "{}_Cancellation_Report_{}.xlsx".format(
             zone, date_str.replace(" ", "_")
         )
-        summary = zone_summaries.get(zone, "")
+        top3 = zone_kitchen_top3.get(zone, [])
 
         try:
-            send_zone_email(to_email, zone, csv_buf, filename, date_str, summary, creds)
+            send_zone_email(to_email, zone, excel_buf, filename, date_str, top3, creds)
             results[zone] = "sent -> {}".format(to_email)
         except Exception as e:
             log.error("Failed to send {} zone email: {}".format(zone, e))

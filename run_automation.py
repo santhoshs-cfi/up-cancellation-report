@@ -8,19 +8,19 @@ Orchestrates the complete pipeline in one run:
   3. Poll until Atlas has finished generating it
   4. Download the CSV
   5. Process it: categorize cancellations, add zones, build pivot tables
-  6. Build per-zone CSV reports (all cancelled orders, filterable by Zone column)
-  7. Email each zone's CSV to the configured recipient
-     - Files <= 25 MB: attached directly
-     - Files >  25 MB: uploaded to Google Drive, link sent in email
+  6. Build per-zone Excel reports — 2 sheets each:
+       Sheet 1: all cancelled orders (all zones, filter by Zone column)
+       Sheet 2: category summary + zone breakdown + kitchen stores
+  7. Email each zone's Excel (direct attachment if <= 25 MB, Drive link if larger)
 
-Usage (same modes as urbanpiper_report.py):
+Usage:
     python run_automation.py smart      # daily always; weekly on Mon; monthly on 1st
     python run_automation.py daily
     python run_automation.py weekly
     python run_automation.py monthly
     python run_automation.py test       # same as daily, for quick testing
 
-Called by GitHub Actions (report.yml) — runs entirely headless, no local machine needed.
+Called by GitHub Actions (report.yml) — runs entirely headless.
 """
 
 import sys
@@ -28,7 +28,6 @@ import os
 import logging
 from datetime import date, timedelta
 
-# ── Setup logging ──────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -39,11 +38,10 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Local imports ──────────────────────────────────────────────────────────────
 try:
     import config
 except ImportError:
-    log.error("config.py not found. Make sure it's in the same folder as this script.")
+    log.error("config.py not found.")
     sys.exit(1)
 
 try:
@@ -60,7 +58,7 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from cancellation_processor import process_csv, build_zone_summaries
+    from cancellation_processor import process_csv, build_kitchen_zone_breakdown
 except ImportError as e:
     log.error("Could not import from cancellation_processor.py: {}".format(e))
     sys.exit(1)
@@ -73,22 +71,17 @@ except ImportError as e:
 
 
 # ==============================================================================
-#  DATE LABEL HELPERS
+#  DATE LABEL
 # ==============================================================================
 
 def make_date_label(mode):
-    """Human-readable date range label for email subject + body."""
     today = date.today()
-
     if mode in ("daily", "test"):
-        yesterday = today - timedelta(days=1)
-        return yesterday.strftime("%Y-%m-%d")
-
+        return (today - timedelta(days=1)).strftime("%Y-%m-%d")
     elif mode == "weekly":
-        end   = today - timedelta(days=1)          # yesterday
+        end   = today - timedelta(days=1)
         start = today - timedelta(days=7)
         return "{} to {}".format(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
-
     elif mode == "monthly":
         first_of_this = today.replace(day=1)
         last_of_prev  = first_of_this - timedelta(days=1)
@@ -97,72 +90,65 @@ def make_date_label(mode):
             first_of_prev.strftime("%Y-%m-%d"),
             last_of_prev.strftime("%Y-%m-%d"),
         )
-
     return today.strftime("%Y-%m-%d")
 
 
 # ==============================================================================
-#  PIPELINE — ONE MODE (daily / weekly / monthly)
+#  PIPELINE
 # ==============================================================================
 
 def run_pipeline(session, mode):
-    """
-    Full end-to-end pipeline for one report mode.
-    Returns the (possibly refreshed) session after execution.
-    """
     time_period = get_time_period(mode)
     date_label  = make_date_label(mode)
 
     log.info("=" * 60)
     log.info("Pipeline | mode={} | timePeriod={} | date={}".format(
-        mode.upper(), time_period, date_label
-    ))
+        mode.upper(), time_period, date_label))
 
-    # ── Step 1: Generate + download CSV ────────────────────────────────────────
+    # Step 1: Generate + download CSV
     try:
         csv_bytes, job_id = generate_and_download_csv(session, time_period)
     except Exception as e:
-        log.warning("Download failed ({}). Trying re-login...".format(e))
+        log.warning("Download failed ({}). Re-logging in...".format(e))
         delete_session()
         session   = login_and_get_session()
         csv_bytes, job_id = generate_and_download_csv(session, time_period)
 
-    log.info("CSV ready — {:,} bytes | jobId={}".format(len(csv_bytes), job_id))
+    log.info("CSV ready - {:,} bytes | jobId={}".format(len(csv_bytes), job_id))
 
-    # ── Step 2: Process CSV -> per-zone CSV files + pivots ─────────────────────
+    # Step 2: Process CSV -> zone Excel files
     log.info("Processing CSV...")
-    zone_csvs, pivot_df, zone_pivot_df, total_orders, total_cancelled = process_csv(csv_bytes)
+    zone_excels, pivot_df, zone_pivot_df, total_orders, total_cancelled = process_csv(csv_bytes)
 
-    log.info("Processing complete — {:,} total orders, {:,} cancelled.".format(
-        total_orders, total_cancelled
-    ))
-    for zone, buf in zone_csvs.items():
+    log.info("Processing complete - {:,} total orders, {:,} cancelled.".format(
+        total_orders, total_cancelled))
+    for zone, buf in zone_excels.items():
         size_mb = len(buf.getvalue()) / (1024 * 1024)
-        log.info("  {}: {:.1f} MB CSV ({} via {})".format(
+        log.info("  {}: {:.1f} MB Excel -> {}".format(
             zone, size_mb,
-            "attachment" if size_mb < 25 else "Google Drive link",
-            "direct" if size_mb < 25 else "Drive upload",
+            "direct attachment" if size_mb < 25 else "Google Drive link"
         ))
 
-    # ── Step 3: Build zone-specific summary text for email bodies ──────────────
-    log.info("Building zone summaries...")
+    # Step 3: Build top-3 kitchen stores per zone (for email body)
+    zone_kitchen_top3 = {}
     try:
         import io
         import pandas as pd
-        df_raw = pd.read_csv(io.BytesIO(csv_bytes), low_memory=False)
         from cancellation_processor import add_zone_city, categorize_all, load_zone_mapping
+        df_raw  = pd.read_csv(io.BytesIO(csv_bytes), low_memory=False)
         zone_df = load_zone_mapping()
         df_raw  = add_zone_city(df_raw, zone_df)
         df_raw  = categorize_all(df_raw)
-        zone_summaries = build_zone_summaries(df_raw, pivot_df, zone_pivot_df)
+        for zone in ["North", "South", "West"]:
+            kdf = build_kitchen_zone_breakdown(df_raw, zone)
+            if not kdf.empty:
+                zone_kitchen_top3[zone] = kdf.head(3).to_dict("records")
     except Exception as e:
-        log.warning("Could not build zone summaries for email body: {}".format(e))
-        zone_summaries = {}
+        log.warning("Could not build kitchen top-3: {}".format(e))
 
-    # ── Step 4: Email zone reports ─────────────────────────────────────────────
+    # Step 4: Send emails
     log.info("Sending emails...")
-    results = send_all_zones(zone_csvs, date_label, zone_summaries)
-
+    results = send_all_zones(zone_excels, date_label, zone_kitchen_top3)
     for zone, result in results.items():
         log.info("  {} -> {}".format(zone, result))
 
@@ -181,32 +167,23 @@ def main():
 
     mode = sys.argv[1].lower().strip()
 
-    # ── Validate credentials ───────────────────────────────────────────────────
     if not config.UP_EMAIL or config.UP_EMAIL == "your-email@company.com":
-        log.error("UP_EMAIL not configured. Set it in config.py or as an env var.")
+        log.error("UP_EMAIL not configured.")
         sys.exit(1)
     if not config.UP_PASSWORD or config.UP_PASSWORD == "your-password-here":
-        log.error("UP_PASSWORD not configured. Set it in config.py or as an env var.")
+        log.error("UP_PASSWORD not configured.")
         sys.exit(1)
 
     today = date.today()
     log.info("=" * 60)
     log.info("UrbanPiper Full Automation | Mode: {} | Date: {} ({})".format(
-        mode.upper(), today.isoformat(), today.strftime("%A")
-    ))
+        mode.upper(), today.isoformat(), today.strftime("%A")))
 
-    # ── Determine which modes to run ───────────────────────────────────────────
-    if mode == "smart":
-        modes_to_run = get_smart_modes()
-    else:
-        modes_to_run = [mode]
-
+    modes_to_run = get_smart_modes() if mode == "smart" else [mode]
     log.info("Modes to run: {}".format([m.upper() for m in modes_to_run]))
 
-    # ── Login once ─────────────────────────────────────────────────────────────
     session = get_session_with_retry()
 
-    # ── Run pipeline for each mode ─────────────────────────────────────────────
     for m in modes_to_run:
         session = run_pipeline(session, m)
 

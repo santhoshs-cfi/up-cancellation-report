@@ -9,6 +9,7 @@ requests==2.32.3
 # Data processing
 pandas==2.2.2
 openpyxl==3.1.5
+xlsxwriter==3.2.0
 
 # Gmail OAuth + API
 google-auth==2.29.0
