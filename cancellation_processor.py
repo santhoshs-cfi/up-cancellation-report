@@ -257,25 +257,55 @@ def build_kitchen_zone_breakdown(df, zone):
 
 
 def _add_formats(wb, zone=None):
-    # Plain, no colours — bold where needed, thin borders, white background
+    # Palette — light blue-grey theme, no black anywhere
+    HDR_BG   = "#D9E1EA"   # light blue-grey header background
+    HDR_FG   = "#2C4770"   # navy header text
+    BODY_FG  = "#37474F"   # slate body text (not black)
+    ALT_BG   = "#EEF4FB"   # very faint blue tint for alternating rows
+    TOT_BG   = "#C5D5E4"   # slightly deeper blue for total/grand total rows
+    TOT_FG   = "#2C4770"   # navy total text
+    BORDER   = "#B0BEC5"   # soft blue-grey border
+    TITLE_FG = "#2C4770"   # navy section title text
+
+    base = {"font_name": "Arial", "font_size": 10, "valign": "vcenter",
+            "border": 1, "border_color": BORDER, "font_color": BODY_FG}
+    hdr  = {"font_name": "Arial", "font_size": 10, "bold": True, "valign": "vcenter",
+            "border": 1, "border_color": BORDER,
+            "bg_color": HDR_BG, "font_color": HDR_FG}
+    tot  = {"font_name": "Arial", "font_size": 10, "bold": True, "valign": "vcenter",
+            "border": 1, "border_color": BORDER,
+            "bg_color": TOT_BG, "font_color": TOT_FG}
+    alt  = dict(base, bg_color=ALT_BG)
+
     f = {}
-    f["hdr"]   = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"align":"center","valign":"vcenter","border":1})
-    f["hdr_l"] = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"align":"left","valign":"vcenter","border":1})
-    f["body"]  = wb.add_format({"font_name":"Arial","font_size":10,"border":1,"align":"center","valign":"vcenter"})
-    f["body_l"]= wb.add_format({"font_name":"Arial","font_size":10,"border":1,"align":"left","valign":"vcenter"})
-    f["alt"]   = f["body"]
-    f["alt_l"] = f["body_l"]
-    f["title"] = wb.add_format({"bold":True,"font_name":"Arial","font_size":12,"align":"left","valign":"vcenter","bottom":2})
-    f["title2"]= wb.add_format({"bold":True,"font_name":"Arial","font_size":11,"align":"left","valign":"vcenter","bottom":2})
-    f["title3"]= wb.add_format({"bold":True,"font_name":"Arial","font_size":11,"align":"left","valign":"vcenter","bottom":2})
-    f["tot"]   = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"border":1,"align":"center","valign":"vcenter","num_format":"#,##0"})
-    f["tot_l"] = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"border":1,"align":"left","valign":"vcenter"})
-    f["pctf"]  = wb.add_format({"font_name":"Arial","font_size":10,"border":1,"align":"center","num_format":'0.00"%"'})
-    f["pcta"]  = f["pctf"]
-    f["pctt"]  = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"border":1,"align":"center","num_format":'0.00"%"'})
-    f["num_b"] = wb.add_format({"font_name":"Arial","font_size":10,"border":1,"align":"center","num_format":"#,##0"})
-    f["num_a"] = f["num_b"]
-    f["num_t"] = wb.add_format({"bold":True,"font_name":"Arial","font_size":10,"border":1,"align":"center","num_format":"#,##0"})
+    f["hdr"]   = wb.add_format({**hdr, "align": "center"})
+    f["hdr_l"] = wb.add_format({**hdr, "align": "left"})
+
+    f["body"]  = wb.add_format({**base, "align": "center"})
+    f["body_l"]= wb.add_format({**base, "align": "left"})
+    f["alt"]   = wb.add_format({**alt,  "align": "center"})
+    f["alt_l"] = wb.add_format({**alt,  "align": "left"})
+
+    f["title"] = wb.add_format({"bold": True, "font_name": "Arial", "font_size": 12,
+                                 "align": "left", "valign": "vcenter",
+                                 "font_color": TITLE_FG, "bottom": 2, "bottom_color": HDR_BG})
+    f["title2"]= wb.add_format({"bold": True, "font_name": "Arial", "font_size": 11,
+                                 "align": "left", "valign": "vcenter",
+                                 "font_color": TITLE_FG, "bottom": 2, "bottom_color": HDR_BG})
+    f["title3"]= wb.add_format({"bold": True, "font_name": "Arial", "font_size": 11,
+                                 "align": "left", "valign": "vcenter",
+                                 "font_color": TITLE_FG, "bottom": 2, "bottom_color": HDR_BG})
+
+    f["tot"]   = wb.add_format({**tot, "align": "center", "num_format": "#,##0"})
+    f["tot_l"] = wb.add_format({**tot, "align": "left"})
+
+    f["pctf"]  = wb.add_format({**base, "align": "center", "num_format": '0.00"%"'})
+    f["pcta"]  = wb.add_format({**alt,  "align": "center", "num_format": '0.00"%"'})
+    f["pctt"]  = wb.add_format({**tot,  "align": "center", "num_format": '0.00"%"'})
+
+    f["num_b"] = wb.add_format({**base, "align": "center", "num_format": "#,##0"})
+    f["num_a"] = wb.add_format({**alt,  "align": "center", "num_format": "#,##0"})
+    f["num_t"] = wb.add_format({**tot,  "align": "center", "num_format": "#,##0"})
     return f
 
 
@@ -402,29 +432,4 @@ def process_csv(csv_bytes):
 
     zone_df = load_zone_mapping()
     df = add_zone_city(df, zone_df)
-    df = categorize_all(df)
-
-    pivot_df, total_orders, total_cancelled = build_pivot(df)
-    zone_pivot_df = build_zone_pivot(df)
-
-    export_df = df.copy()
-    for col in export_df.select_dtypes(include="datetime64[ns]").columns:
-        export_df[col] = export_df[col].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
-    export_df = export_df.fillna("")
-
-    all_cancelled_df = export_df[
-        export_df["Cancellation Category"] != ""
-    ].reset_index(drop=True)
-
-    print("Cancelled orders: {:,} rows (Sheet 1 of every zone Excel)".format(len(all_cancelled_df)))
-
-    zone_excels = {}
-    for zone in ZONES:
-        kitchen_df = build_kitchen_zone_breakdown(df, zone)
-        zone_excels[zone] = build_zonal_excel(
-            all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zone
-        )
-        size_mb = len(zone_excels[zone].getvalue()) / (1024 * 1024)
-        print("Built Excel for {} zone - {:.1f} MB".format(zone, size_mb))
-
-    return zone_excels, pivot_df, zone_pivot_df, total_orders, total_cancelled
+    df = categ
