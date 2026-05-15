@@ -186,48 +186,106 @@ def _upload_to_drive(creds, excel_bytes, filename):
 
 
 # ==============================================================================
-#  PLAIN-TEXT TABLE BUILDERS (for email body)
+#  HTML TABLE BUILDERS (for email body)
 # ==============================================================================
 
-def _fmt_summary_table(pivot_df):
-    """Formats the cancellation category pivot as a plain-text table."""
-    lines = []
-    lines.append("{:<30} {:>8} {:>12} {:>14}".format(
-        "Category", "Count", "% of Orders", "% Cancelled"))
-    lines.append("-" * 68)
-    for _, row in pivot_df.iterrows():
+_TABLE_CSS = (
+    "border-collapse:collapse;font-family:Arial,sans-serif;"
+    "font-size:13px;width:100%"
+)
+_TH = (
+    "style='background:#1F4E79;color:#fff;padding:7px 12px;"
+    "text-align:{}border:1px solid #ccc;white-space:nowrap'"
+)
+_TD      = "style='padding:6px 12px;border:1px solid #ddd;text-align:{};white-space:nowrap'"
+_TD_ALT  = "style='padding:6px 12px;border:1px solid #ddd;text-align:{};white-space:nowrap;background:#f5f8fc'"
+_TD_BOLD = "style='padding:6px 12px;border:1px solid #ccc;text-align:{};font-weight:bold;background:#e8eef5'"
+
+
+def _th(text, align="center"):
+    return "<th {}>{}".format(_TH.format(align + ";"), text) + "</th>"
+
+
+def _td(text, align="center", alt=False, bold=False):
+    if bold:
+        return "<td {}>{}</td>".format(_TD_BOLD.format(align + ";"), text)
+    style = _TD_ALT if alt else _TD
+    return "<td {}>{}</td>".format(style.format(align + ";"), text)
+
+
+def _build_summary_html(pivot_df):
+    rows_html = ""
+    totals = {"Total Cancelled", "Total Orders"}
+    for i, (_, row) in enumerate(pivot_df.iterrows()):
         cat   = str(row["Cancellation Category"])
         count = "{:,}".format(int(row["Count"]))
         p_ord = row["% of Total Orders"]
         p_can = row["% of Total Cancelled"]
         pct_o = "{:.2f}%".format(float(p_ord)) if str(p_ord) != "-" else "-"
         pct_c = "{:.2f}%".format(float(p_can)) if str(p_can) != "-" else "-"
-        lines.append("{:<30} {:>8} {:>12} {:>14}".format(cat, count, pct_o, pct_c))
-    return "\n".join(lines)
+        bold  = cat in totals
+        alt   = (i % 2 == 0) and not bold
+        rows_html += "<tr>{}{}{}{}</tr>".format(
+            _td(cat,   "left",   alt, bold),
+            _td(count, "center", alt, bold),
+            _td(pct_o, "center", alt, bold),
+            _td(pct_c, "center", alt, bold),
+        )
+    return (
+        "<h3 style='font-family:Arial;color:#1F4E79;margin:24px 0 6px'>"
+        "Cancellation Category Summary</h3>"
+        "<table style='{}'><tr>{}{}{}{}</tr>{}</table>"
+    ).format(
+        _TABLE_CSS,
+        _th("Category",         "left"),
+        _th("Count"),
+        _th("% of Total Orders"),
+        _th("% of Total Cancelled"),
+        rows_html,
+    )
 
 
-def _fmt_zone_table(zone_pivot_df, zones=("North", "South", "West")):
-    """Formats the zone-wise breakdown pivot as a plain-text table."""
-    lines = []
-    # Header
-    hdr = "{:<30}".format("Category")
+def _build_zone_html(zone_pivot_df, zones=("North", "South", "West")):
+    hdrs = _th("Category", "left")
     for z in zones:
-        hdr += " {:>8} {:>8}".format(z, "%" + z)
-    hdr += " {:>12} {:>9}".format("Grand Total", "Overall%")
-    lines.append(hdr)
-    lines.append("-" * (30 + len(zones) * 17 + 23))
-    for _, row in zone_pivot_df.iterrows():
-        cat = str(row["Cancellation Category"])
-        line = "{:<30}".format(cat)
+        hdrs += _th(z) + _th("% " + z)
+    hdrs += _th("Grand Total") + _th("Overall %")
+
+    rows_html = ""
+    for i, (_, row) in enumerate(zone_pivot_df.iterrows()):
+        cat      = str(row["Cancellation Category"])
+        is_grand = cat == "Grand Total"
+        alt      = (i % 2 == 0) and not is_grand
+        cells    = _td(cat, "left", alt, is_grand)
         for z in zones:
-            cnt = "{:,}".format(int(row.get(z, 0)))
-            pct = "{:.2f}%".format(float(row.get("% " + z, 0)))
-            line += " {:>8} {:>8}".format(cnt, pct)
-        gt  = "{:,}".format(int(row.get("Grand Total", 0)))
-        op  = "{:.2f}%".format(float(row.get("Overall %", 0)))
-        line += " {:>12} {:>9}".format(gt, op)
-        lines.append(line)
-    return "\n".join(lines)
+            cells += _td("{:,}".format(int(row.get(z, 0))),          "center", alt, is_grand)
+            cells += _td("{:.2f}%".format(float(row.get("% "+z,0))), "center", alt, is_grand)
+        cells += _td("{:,}".format(int(row.get("Grand Total", 0))),   "center", alt, is_grand)
+        cells += _td("{:.2f}%".format(float(row.get("Overall %", 0))),"center", alt, is_grand)
+        rows_html += "<tr>{}</tr>".format(cells)
+
+    return (
+        "<h3 style='font-family:Arial;color:#1F4E79;margin:24px 0 6px'>"
+        "Zone-wise Cancellation Breakdown</h3>"
+        "<table style='{}'><tr>{}</tr>{}</table>"
+    ).format(_TABLE_CSS, hdrs, rows_html)
+
+
+def _build_top3_html(top3_stores, zone):
+    if not top3_stores:
+        return ""
+    items = "".join(
+        "<li style='margin:3px 0'><b>{}</b> &mdash; {:,} cancellations</li>".format(
+            s.get("Store Name", ""), int(s.get("Count", 0))
+        )
+        for s in top3_stores[:3]
+    )
+    return (
+        "<h3 style='font-family:Arial;color:#1F4E79;margin:24px 0 6px'>"
+        "Top Kitchen Cancellation Stores &mdash; {} Zone</h3>"
+        "<ol style='font-family:Arial;font-size:13px;margin:0;padding-left:20px'>"
+        "{}</ol>"
+    ).format(zone, items)
 
 
 # ==============================================================================
@@ -262,67 +320,61 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str,
         log.info("File exceeds 25 MB - uploading to Google Drive.")
         drive_link = _upload_to_drive(creds, excel_bytes, filename)
 
-    # ── Build inline tables ────────────────────────────────────────────────────
-    summary_block = ""
+    # ── Build HTML email body ──────────────────────────────────────────────────
+    summary_html = ""
     if pivot_df is not None:
         try:
-            summary_block = (
-                "\n" + "=" * 68 + "\n"
-                "CANCELLATION CATEGORY SUMMARY\n"
-                + "=" * 68 + "\n"
-                + _fmt_summary_table(pivot_df)
-                + "\n"
-            )
+            summary_html = _build_summary_html(pivot_df)
         except Exception as e:
-            log.warning("Could not build summary table for email body: {}".format(e))
+            log.warning("Could not build summary table: {}".format(e))
 
-    zone_block = ""
+    zone_html = ""
     if zone_pivot_df is not None:
         try:
-            zone_block = (
-                "\n" + "=" * 68 + "\n"
-                "ZONE-WISE CANCELLATION BREAKDOWN\n"
-                + "=" * 68 + "\n"
-                + _fmt_zone_table(zone_pivot_df)
-                + "\n"
-            )
+            zone_html = _build_zone_html(zone_pivot_df)
         except Exception as e:
-            log.warning("Could not build zone table for email body: {}".format(e))
+            log.warning("Could not build zone table: {}".format(e))
 
-    top3_block = ""
+    top3_html = ""
     if top3_stores:
-        lines = [
-            "  {}. {} - {}".format(i + 1, s.get("Store Name", ""), s.get("Count", ""))
-            for i, s in enumerate(top3_stores[:3])
-        ]
-        top3_block = (
-            "\nTop Kitchen Cancellation Stores ({} Zone):\n".format(zone)
-            + "\n".join(lines) + "\n"
-        )
+        try:
+            top3_html = _build_top3_html(top3_stores, zone)
+        except Exception as e:
+            log.warning("Could not build top-3 block: {}".format(e))
 
     if use_drive:
-        delivery_note = (
-            "\nThe report file is {:.1f} MB which exceeds Gmail's 25 MB limit.\n"
-            "Download it directly from Google Drive (no sign-in required):\n"
-            "{}\n"
-        ).format(size_mb, drive_link)
+        delivery_html = (
+            "<p style='font-family:Arial;font-size:14px'>"
+            "The report file is <b>{:.1f} MB</b> which exceeds Gmail's 25&nbsp;MB limit.<br>"
+            "Download it directly from Google Drive (no sign-in required):<br>"
+            "<a href='{link}'>{link}</a></p>"
+        ).format(size_mb, link=drive_link)
     else:
-        delivery_note = "\nThe Excel report is attached ({:.1f} MB).\n".format(size_mb)
+        delivery_html = (
+            "<p style='font-family:Arial;font-size:14px'>"
+            "The Excel report is attached (<b>{:.1f}&nbsp;MB</b>).</p>"
+        ).format(size_mb)
 
-    body = (
-        "Hi Team,\n\n"
-        "Please find the {zone} Zone Cancellation Report for {date}.\n"
-        "{delivery}"
-        "{summary}"
-        "{zone_table}"
-        "{top3}"
-        "\nThis is an automated report. Do not reply to this email.\n"
-    ).format(
+    body = """
+<html><body style='margin:0;padding:16px;background:#fff'>
+<p style='font-family:Arial;font-size:14px'>Hi Team,</p>
+<p style='font-family:Arial;font-size:14px'>
+Please find the <b>{zone} Zone</b> Cancellation Report for <b>{date}</b>.
+</p>
+{delivery}
+{summary}
+{zone_table}
+{top3}
+<p style='font-family:Arial;font-size:12px;color:#888;margin-top:32px'>
+This is an automated report. Do not reply to this email.
+</p>
+</body></html>
+""".format(
         zone=zone, date=date_str,
-        delivery=delivery_note,
-        summary=summary_block,
-        zone_table=zone_block,
-        top3=top3_block,
+        delivery=delivery_html,
+        summary=summary_html,
+        zone_table=zone_html,
+        top3=top3_html,
     )
 
     # ── MIME message ───────────────────────────────────────────────────────────
@@ -332,7 +384,7 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str,
     msg["To"]      = to_email
     msg["Subject"] = "[{zone} Zone] {label} Cancellation Report - {date}".format(
         zone=zone, label=mode_label, date=date_str)
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+    msg.attach(MIMEText(body, "html", "utf-8"))
 
     if not use_drive:
         attachment = MIMEBase(
