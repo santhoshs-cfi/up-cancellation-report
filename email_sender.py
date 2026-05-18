@@ -350,10 +350,7 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str,
             "<a href='{link}'>{link}</a></p>"
         ).format(size_mb, link=drive_link)
     else:
-        delivery_html = (
-            "<p style='font-family:Arial;font-size:14px'>"
-            "The Excel report is attached (<b>{:.1f}&nbsp;MB</b>).</p>"
-        ).format(size_mb)
+        delivery_html = ""
 
     body = """
 <html><body style='margin:0;padding:16px;background:#fff'>
@@ -466,3 +463,4 @@ def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None,
                 log.error("Failed to send test copy for {} zone: {}".format(zone, e))
 
     return results
+                                                                                                                                                            
