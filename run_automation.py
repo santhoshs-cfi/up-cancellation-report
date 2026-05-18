@@ -15,12 +15,17 @@ Orchestrates the complete pipeline in one run:
 
 Usage:
     python run_automation.py smart      # daily always; weekly on Mon; monthly on 1st
+    python run_automation.py auto       # weekly on Mon; monthly on 1st (NO daily)
     python run_automation.py daily
     python run_automation.py weekly
     python run_automation.py monthly
     python run_automation.py test       # same as daily, for quick testing
 
 Called by GitHub Actions (report.yml) — runs entirely headless.
+
+Cron-job.org setup (2 jobs):
+  Job 1: every day at 02:30 UTC (8:00 AM IST)  -> mode: daily
+  Job 2: cron 30 3 1 * 1  (Mon + 1st of month) -> mode: auto
 """
 
 import sys
@@ -48,6 +53,7 @@ try:
     from urbanpiper_report import (
         get_time_period,
         get_smart_modes,
+        get_auto_modes,
         get_session_with_retry,
         login_and_get_session,
         delete_session,
@@ -180,17 +186,8 @@ def main():
     log.info("UrbanPiper Full Automation | Mode: {} | Date: {} ({})".format(
         mode.upper(), today.isoformat(), today.strftime("%A")))
 
-    modes_to_run = get_smart_modes() if mode == "smart" else [mode]
-    log.info("Modes to run: {}".format([m.upper() for m in modes_to_run]))
-
-    session = get_session_with_retry()
-
-    for m in modes_to_run:
-        session = run_pipeline(session, m)
-
-    log.info("=" * 60)
-    log.info("All done. {} pipeline(s) completed.".format(len(modes_to_run)))
-
-
-if __name__ == "__main__":
-    main()
+    if mode == "smart":
+        modes_to_run = get_smart_modes()
+    elif mode == "auto":
+        modes_to_run = get_auto_modes()
+      

@@ -65,6 +65,25 @@ def get_smart_modes():
     return modes
 
 
+def get_auto_modes():
+    """Auto mode: weekly on Monday, monthly on 1st — never daily.
+    Used by cron-job.org Job 2 (fires on Mon + 1st via cron: 30 3 1 * 1).
+    Returns empty list on any other day so the pipeline exits cleanly.
+    """
+    today = date.today()
+    modes = []
+    if today.weekday() == 0:
+        modes.append("weekly")
+        log.info("Auto mode: Monday -> running weekly report.")
+    if today.day == 1:
+        modes.append("monthly")
+        log.info("Auto mode: 1st of month -> running monthly report.")
+    if not modes:
+        log.info("Auto mode: today ({}) is neither Monday nor 1st — skipping.".format(
+            today.strftime("%A %d %b")))
+    return modes
+
+
 # ==============================================================================
 #  SESSION MANAGEMENT
 #  Session file stores: {"cookies": {name: value}, "token": "JWT string or null"}
@@ -499,27 +518,4 @@ def main():
 
     mode = sys.argv[1].lower().strip()
 
-    if not config.UP_EMAIL or config.UP_EMAIL == "your-email@company.com":
-        log.error("UP_EMAIL not set!")
-        sys.exit(1)
-    if not config.UP_PASSWORD or config.UP_PASSWORD == "your-password-here":
-        log.error("UP_PASSWORD not set!")
-        sys.exit(1)
-
-    today = date.today()
-    log.info("=" * 60)
-    log.info("Mode: {} | Date: {} ({})".format(mode.upper(), today.isoformat(), today.strftime("%A")))
-
-    modes_to_run = get_smart_modes() if mode == "smart" else [mode]
-    log.info("Reports: {}".format([m.upper() for m in modes_to_run]))
-
-    session = get_session_with_retry()
-    for m in modes_to_run:
-        session = run_report(session, m)
-
-    log.info("=" * 60)
-    log.info("All done.")
-
-
-if __name__ == "__main__":
-    main()
+    if not config.UP_EMAIL or config.UP_EMAIL == "your-email@c

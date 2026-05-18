@@ -1,20 +1,23 @@
 name: UrbanPiper Automated Reports
 
 on:
-  # Triggered by cron-job.org via GitHub API for daily smart runs.
+  # Triggered by cron-job.org (2 jobs):
+  #   Job 1 — every day at 02:30 UTC (8:00 AM IST) -> mode: daily
+  #   Job 2 — cron 30 3 1 * 1  (Mon + 1st of month, 9:00 AM IST) -> mode: auto
   # For manual testing, trigger from the Actions tab and pick a mode below.
   workflow_dispatch:
     inputs:
       mode:
         description: 'Report mode to run'
         required: false
-        default: 'smart'
+        default: 'daily'
         type: choice
         options:
-          - smart
           - daily
+          - auto
           - weekly
           - monthly
+          - smart
           - test
 
 jobs:
@@ -60,7 +63,4 @@ jobs:
             login_debug.png
             login_step1_loaded.png
             login_step2_email_filled.png
-            login_step3_pwd_visible.png
-            login_step4_success.png
-          if-no-files-found: ignore
-          retention-days: 7
+ 
