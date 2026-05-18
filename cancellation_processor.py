@@ -432,4 +432,29 @@ def process_csv(csv_bytes):
 
     zone_df = load_zone_mapping()
     df = add_zone_city(df, zone_df)
-    df = categ
+    df = categorize_all(df)
+
+    pivot_df, total_orders, total_cancelled = build_pivot(df)
+    zone_pivot_df = build_zone_pivot(df)
+
+    export_df = df.copy()
+    for col in export_df.select_dtypes(include="datetime64[ns]").columns:
+        export_df[col] = export_df[col].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
+    export_df = export_df.fillna("")
+
+    all_cancelled_df = export_df[
+        export_df["Cancellation Category"] != ""
+    ].reset_index(drop=True)
+
+    print("Cancelled orders: {:,} rows (Sheet 1 of every zone Excel)".format(len(all_cancelled_df)))
+
+    zone_excels = {}
+    for zone in ZONES:
+        kitchen_df = build_kitchen_zone_breakdown(df, zone)
+        zone_excels[zone] = build_zonal_excel(
+            all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zone
+        )
+        size_mb = len(zone_excels[zone].getvalue()) / (1024 * 1024)
+        print("Built Excel for {} zone - {:.1f} MB".format(zone, size_mb))
+
+    return zone_excels, pivot_df, zone_pivot_df, total_orders, total_cancelled
