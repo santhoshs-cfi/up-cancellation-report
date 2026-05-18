@@ -190,4 +190,21 @@ def main():
         modes_to_run = get_smart_modes()
     elif mode == "auto":
         modes_to_run = get_auto_modes()
-      
+        if not modes_to_run:
+            log.info("Auto mode: today is neither Monday nor 1st — nothing to run.")
+            return
+    else:
+        modes_to_run = [mode]
+    log.info("Modes to run: {}".format([m.upper() for m in modes_to_run]))
+
+    session = get_session_with_retry()
+
+    for m in modes_to_run:
+        session = run_pipeline(session, m)
+
+    log.info("=" * 60)
+    log.info("All done. {} pipeline(s) completed.".format(len(modes_to_run)))
+
+
+if __name__ == "__main__":
+    main()

@@ -418,18 +418,12 @@ def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None,
                    pivot_df=None, zone_pivot_df=None, mode="daily"):
     """Sends Excel reports to all zones. Builds credentials once, reuses.
 
-    pivot_df and zone_pivot_df are included as plain-text tables in the body.
+    pivot_df and zone_pivot_df are included as HTML tables in the email body.
     mode (daily/weekly/monthly) is used in the email subject line.
-    If TEST_EMAIL env var is set, every zone report is also sent to that
-    address. Remove the secret from GitHub when testing is done.
     """
     email_cfg         = load_email_config()
     zone_kitchen_top3 = zone_kitchen_top3 or {}
     creds             = _get_credentials()
-    test_email        = os.environ.get("TEST_EMAIL", "").strip()
-
-    if test_email:
-        log.info("TEST_EMAIL is set - all zone reports will also go to {}.".format(test_email))
 
     results = {}
     for zone, excel_buf in zone_excels.items():
@@ -452,15 +446,4 @@ def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None,
             log.error("Failed to send {} zone email: {}".format(zone, e))
             results[zone] = "FAILED: {}".format(e)
 
-        # Also send to test email if configured
-        if test_email and test_email != to_email:
-            try:
-                excel_buf.seek(0)
-                send_zone_email(test_email, zone, excel_buf, filename, date_str,
-                                top3, creds, pivot_df, zone_pivot_df, mode)
-                log.info("Test copy sent to {} ({} zone).".format(test_email, zone))
-            except Exception as e:
-                log.error("Failed to send test copy for {} zone: {}".format(zone, e))
-
     return results
-                                                                                                                                                            

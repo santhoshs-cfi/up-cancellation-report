@@ -518,4 +518,35 @@ def main():
 
     mode = sys.argv[1].lower().strip()
 
-    if not config.UP_EMAIL or config.UP_EMAIL == "your-email@c
+    if not config.UP_EMAIL or config.UP_EMAIL == "your-email@company.com":
+        log.error("UP_EMAIL not set!")
+        sys.exit(1)
+    if not config.UP_PASSWORD or config.UP_PASSWORD == "your-password-here":
+        log.error("UP_PASSWORD not set!")
+        sys.exit(1)
+
+    today = date.today()
+    log.info("=" * 60)
+    log.info("Mode: {} | Date: {} ({})".format(mode.upper(), today.isoformat(), today.strftime("%A")))
+
+    if mode == "smart":
+        modes_to_run = get_smart_modes()
+    elif mode == "auto":
+        modes_to_run = get_auto_modes()
+        if not modes_to_run:
+            log.info("Auto mode: today is neither Monday nor 1st — nothing to run.")
+            return
+    else:
+        modes_to_run = [mode]
+    log.info("Reports: {}".format([m.upper() for m in modes_to_run]))
+
+    session = get_session_with_retry()
+    for m in modes_to_run:
+        session = run_report(session, m)
+
+    log.info("=" * 60)
+    log.info("All done.")
+
+
+if __name__ == "__main__":
+    main()
