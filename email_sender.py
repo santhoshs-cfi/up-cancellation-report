@@ -44,17 +44,34 @@ SIZE_LIMIT_BYTES = 25 * 1024 * 1024   # 25 MB
 #  LOAD EMAIL CONFIG
 # ==============================================================================
 
+def _parse_emails(raw):
+    """Split a comma-separated email string into a clean list."""
+    return [e.strip() for e in raw.split(",") if e.strip()]
+
+
 def load_email_config():
+    """
+    Returns a dict: { "North": ["a@x.com", ...], "South": [...], "West": [...] }
+
+    Env vars (NORTH_EMAIL, SOUTH_EMAIL, WEST_EMAIL) may contain a single address
+    or a comma-separated list of addresses. email_config.json supports the same.
+    """
     north = os.environ.get("NORTH_EMAIL", "")
     south = os.environ.get("SOUTH_EMAIL", "")
     west  = os.environ.get("WEST_EMAIL",  "")
 
     if north or south or west:
         log.info("Zone emails loaded from environment variables.")
-        mapping = {"North": north, "South": south, "West": west}
-        for zone, addr in mapping.items():
-            if not addr:
+        mapping = {
+            "North": _parse_emails(north),
+            "South": _parse_emails(south),
+            "West":  _parse_emails(west),
+        }
+        for zone, addrs in mapping.items():
+            if not addrs:
                 log.warning("Env var missing for {} zone email.".format(zone))
+            else:
+                log.info("  {} zone -> {} recipient(s)".format(zone, len(addrs)))
         return mapping
 
     if not os.path.exists(_EMAIL_CFG):
@@ -67,13 +84,15 @@ def load_email_config():
         cfg = json.load(f)
     log.info("Zone emails loaded from email_config.json.")
     mapping = {
-        "North": cfg.get("north_email", ""),
-        "South": cfg.get("south_email", ""),
-        "West":  cfg.get("west_email",  ""),
+        "North": _parse_emails(cfg.get("north_email", "")),
+        "South": _parse_emails(cfg.get("south_email", "")),
+        "West":  _parse_emails(cfg.get("west_email",  "")),
     }
-    for zone, addr in mapping.items():
-        if not addr:
+    for zone, addrs in mapping.items():
+        if not addrs:
             log.warning("email_config.json: {} zone email is empty.".format(zone))
+        else:
+            log.info("  {} zone -> {} recipient(s)".format(zone, len(addrs)))
     return mapping
 
 
@@ -297,11 +316,15 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str,
                     mode="daily"):
     """
     Sends a zone cancellation report Excel.
+    - to_email: a single address string OR a list of addresses
     - Attaches directly if <= 25 MB
     - Uploads to Google Drive and sends link if > 25 MB
     - Includes category summary + zone breakdown tables in email body
     - mode: daily / weekly / monthly — used in subject line
     """
+    # Normalise to list
+    if isinstance(to_email, str):
+        to_email = _parse_emails(to_email)
     from googleapiclient.discovery import build
 
     if creds is None:
@@ -378,7 +401,8 @@ This is an automated report. Do not reply to this email.
     mode_label = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly",
                   "test": "Daily"}.get(mode.lower(), "Daily")
     msg = MIMEMultipart()
-    msg["To"]      = to_email
+    to_header      = ", ".join(to_email)
+    msg["To"]      = to_header
     msg["Subject"] = "[{zone} Zone] {label} Cancellation Report - {date}".format(
         zone=zone, label=mode_label, date=date_str)
     msg.attach(MIMEText(body, "html", "utf-8"))
@@ -403,8 +427,8 @@ This is an automated report. Do not reply to this email.
         userId="me", body={"raw": raw}
     ).execute()
 
-    log.info("Email sent to {} ({} zone) | ID: {} | Via: {}".format(
-        to_email, zone, result.get("id"),
+    log.info("Email sent to {} recipient(s) ({} zone) | ID: {} | Via: {}".format(
+        len(to_email), zone, result.get("id"),
         "Drive link" if use_drive else "attachment"
     ))
     return result.get("id")
@@ -441,7 +465,7 @@ def send_all_zones(zone_excels, date_str, zone_kitchen_top3=None,
         try:
             send_zone_email(to_email, zone, excel_buf, filename, date_str,
                             top3, creds, pivot_df, zone_pivot_df, mode)
-            results[zone] = "sent -> {}".format(to_email)
+            results[zone] = "sent -> {} recipient(s)".format(len(to_email))
         except Exception as e:
             log.error("Failed to send {} zone email: {}".format(zone, e))
             results[zone] = "FAILED: {}".format(e)
