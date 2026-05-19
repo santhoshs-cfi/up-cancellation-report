@@ -403,8 +403,25 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=6
     token   = session.get("token")
     headers = _make_headers(token)
 
-    # Step 1: Queue report (no email recipients)
-    log.info("Queuing report | timePeriod={}".format(time_period))
+    # Step 1a: Snapshot existing jobs BEFORE queuing so we can identify the new one
+    existing_ids = set()
+    try:
+        for t in _query_task_list(session):
+            jid = t.get("jobId", "")
+            if jid:
+                existing_ids.add(jid)
+        log.info("Pre-queue snapshot: {} existing job(s).".format(len(existing_ids)))
+    except Exception as e:
+        log.warning("Could not snapshot task list: {}".format(e))
+
+    # Step 1b: Queue report
+    # We must pass at least one email so UrbanPiper creates a visible task entry
+    # in the task list. Without an email, the report is queued silently and never
+    # appears — causing the poll to wait forever.
+    # UP_EMAIL is used as the notify address; UrbanPiper will also send a raw CSV
+    # to that inbox (can be ignored — our processed zone reports go out separately).
+    notify_email = config.UP_EMAIL
+    log.info("Queuing report | timePeriod={} | notify={}".format(time_period, notify_email))
     payload = {
         "operationName": "generateReport",
         "variables": {
@@ -412,7 +429,7 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=6
                 "id":           config.REPORT_ID,
                 "name":         config.REPORT_NAME,
                 "exportFormat": config.EXPORT_FORMAT,
-                "emails":       [],
+                "emails":       [notify_email],
                 "filters": {
                     "platforms":   config.PLATFORMS,
                     "locations":   config.LOCATION_IDS,
@@ -441,15 +458,8 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=6
     log.info("Report queued. Polling every {}s (max {}s)...".format(poll_interval, max_wait))
 
     # Step 2: Snapshot existing job IDs so we only track the NEWLY queued report
-    existing_ids = set()
-    try:
-        for t in _query_task_list(session):
-            jid = t.get("jobId", "")
-            if jid:
-                existing_ids.add(jid)
-        log.info("Existing task snapshot: {} job(s) already in list.".format(len(existing_ids)))
-    except Exception as e:
-        log.warning("Could not snapshot task list: {}".format(e))
+    # (snapshot was already taken before queuing — reused here)
+    log.info("Polling for new job (skipping {} pre-existing jobs)...".format(len(existing_ids)))
 
     # Step 3: Poll for the NEW report (ignore any pre-existing jobs)
     deadline  = time.time() + max_wait
