@@ -124,10 +124,18 @@ def _validate_csv_dates(csv_bytes, mode, time_period):
         actual_max = df[col].max().date()
         log.info("CSV date range in downloaded data: {} → {}".format(actual_min, actual_max))
 
-        # Parse expected dates from time_period string (format: "YYYY-MM-DD,YYYY-MM-DD")
-        parts = time_period.split(",")
-        expected_start = date.fromisoformat(parts[0].strip())
-        expected_end   = date.fromisoformat(parts[1].strip())
+        # Resolve expected dates from mode (YESTERDAY/LAST_7_DAYS are constants, not date strings)
+        today = date.today()
+        if mode in ("daily", "test"):
+            expected_start = expected_end = today - timedelta(days=1)
+        elif mode == "weekly":
+            expected_end   = today - timedelta(days=1)
+            expected_start = today - timedelta(days=7)
+        else:
+            # monthly uses explicit "YYYY-MM-DD,YYYY-MM-DD"
+            parts = time_period.split(",")
+            expected_start = date.fromisoformat(parts[0].strip())
+            expected_end   = date.fromisoformat(parts[1].strip())
         log.info("Expected date range for {} mode    : {} → {}".format(
             mode.upper(), expected_start, expected_end))
 

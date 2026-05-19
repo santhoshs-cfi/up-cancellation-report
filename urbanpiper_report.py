@@ -39,18 +39,24 @@ except ImportError:
 # ==============================================================================
 
 def get_time_period(mode):
-    """Returns explicit date range strings (start,end) for all modes.
-    Always uses real dates — never string constants like YESTERDAY or LAST_7_DAYS
-    which the UrbanPiper API may silently mishandle.
+    """
+    Returns the timePeriod value to send to UrbanPiper API.
+
+    Daily/weekly use UrbanPiper's own recognised constants (YESTERDAY, LAST_7_DAYS)
+    because the API generates those quickly from cache.  Custom date strings cause
+    UrbanPiper to spin up a cold query that can take >10 min and never appear in
+    the task list.
+
+    Monthly uses explicit dates because there is no LAST_MONTH constant.
+
+    The snapshot-based polling + date validation downstream ensures we always
+    download the correct freshly-generated report, not a stale cached one.
     """
     today = date.today()
     if mode in ("daily", "test"):
-        yesterday = today - timedelta(days=1)
-        return "{},{}".format(yesterday.isoformat(), yesterday.isoformat())
+        return "YESTERDAY"
     elif mode == "weekly":
-        end   = today - timedelta(days=1)
-        start = today - timedelta(days=7)
-        return "{},{}".format(start.isoformat(), end.isoformat())
+        return "LAST_7_DAYS"
     elif mode == "monthly":
         first_of_this = today.replace(day=1)
         last_of_prev  = first_of_this - timedelta(days=1)
