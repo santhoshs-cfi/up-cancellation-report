@@ -88,6 +88,7 @@ def make_date_label(mode):
     if mode in ("daily", "test"):
         return (today - timedelta(days=1)).strftime("%Y-%m-%d")
     elif mode == "weekly":
+        # Previous full Mon-Sun (runs on Monday: today-7=Mon, today-1=Sun)
         end   = today - timedelta(days=1)
         start = today - timedelta(days=7)
         return "{} to {}".format(start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
@@ -129,6 +130,7 @@ def _validate_csv_dates(csv_bytes, mode, time_period):
         if mode in ("daily", "test"):
             expected_start = expected_end = today - timedelta(days=1)
         elif mode == "weekly":
+            # Explicit Mon-Sun of previous week
             expected_end   = today - timedelta(days=1)
             expected_start = today - timedelta(days=7)
         else:

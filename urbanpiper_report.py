@@ -54,9 +54,14 @@ def get_time_period(mode):
     """
     today = date.today()
     if mode in ("daily", "test"):
+        # YESTERDAY constant = previous day, recognised and cached by UrbanPiper
         return "YESTERDAY"
     elif mode == "weekly":
-        return "LAST_7_DAYS"
+        # Explicit Mon-Sun of previous week (today is always Monday when this runs)
+        # today-1 = Sunday, today-7 = previous Monday
+        end   = today - timedelta(days=1)   # Sunday
+        start = today - timedelta(days=7)   # Monday of previous week
+        return "{},{}".format(start.isoformat(), end.isoformat())
     elif mode == "monthly":
         first_of_this = today.replace(day=1)
         last_of_prev  = first_of_this - timedelta(days=1)
