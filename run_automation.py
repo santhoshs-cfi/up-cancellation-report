@@ -30,8 +30,11 @@ Cron-job.org setup (2 jobs):
 
 import sys
 import os
+import io
 import logging
 from datetime import date, timedelta
+
+import pandas as pd
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,6 +106,56 @@ def make_date_label(mode):
 #  PIPELINE
 # ==============================================================================
 
+def _validate_csv_dates(csv_bytes, mode, time_period):
+    """
+    Reads the downloaded CSV and verifies its date range matches what was requested.
+    Raises ValueError if the data is from the wrong period — stops the pipeline
+    before any wrong data gets emailed.
+    """
+    try:
+        df = pd.read_csv(io.BytesIO(csv_bytes), low_memory=False)
+        col = next((c for c in df.columns if "Order Creation Time" in c), None)
+        if col is None:
+            log.warning("Date validation skipped — 'Order Creation Time' column not found.")
+            return
+
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+        actual_min = df[col].min().date()
+        actual_max = df[col].max().date()
+        log.info("CSV date range in downloaded data: {} → {}".format(actual_min, actual_max))
+
+        # Parse expected dates from time_period string (format: "YYYY-MM-DD,YYYY-MM-DD")
+        parts = time_period.split(",")
+        expected_start = date.fromisoformat(parts[0].strip())
+        expected_end   = date.fromisoformat(parts[1].strip())
+        log.info("Expected date range for {} mode    : {} → {}".format(
+            mode.upper(), expected_start, expected_end))
+
+        # Allow 1-day tolerance for timezone edge cases
+        tolerance = timedelta(days=1)
+        if (actual_min < expected_start - tolerance or
+                actual_max > expected_end + tolerance):
+            raise ValueError(
+                "DATE MISMATCH DETECTED — Aborting to prevent wrong data being emailed.\n"
+                "  Expected : {} → {}\n"
+                "  Got      : {} → {}\n"
+                "  Mode     : {}\n"
+                "  This usually means the API returned a cached/old report.\n"
+                "  Re-run the workflow to retry with a fresh report.".format(
+                    expected_start, expected_end, actual_min, actual_max, mode.upper()
+                )
+            )
+
+        log.info("Date validation PASSED — CSV data matches expected {} range.".format(
+            mode.upper()))
+
+    except ValueError:
+        raise
+    except Exception as e:
+        log.warning("Date validation check failed with unexpected error: {}. "
+                    "Proceeding anyway.".format(e))
+
+
 def run_pipeline(session, mode):
     time_period = get_time_period(mode)
     date_label  = make_date_label(mode)
@@ -121,6 +174,9 @@ def run_pipeline(session, mode):
         csv_bytes, job_id = generate_and_download_csv(session, time_period)
 
     log.info("CSV ready - {:,} bytes | jobId={}".format(len(csv_bytes), job_id))
+
+    # Step 1b: Validate that the downloaded CSV actually covers the expected date range
+    _validate_csv_dates(csv_bytes, mode, time_period)
 
     # Step 2: Process CSV -> zone Excel files
     log.info("Processing CSV...")

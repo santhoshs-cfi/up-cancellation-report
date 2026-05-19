@@ -39,11 +39,18 @@ except ImportError:
 # ==============================================================================
 
 def get_time_period(mode):
+    """Returns explicit date range strings (start,end) for all modes.
+    Always uses real dates — never string constants like YESTERDAY or LAST_7_DAYS
+    which the UrbanPiper API may silently mishandle.
+    """
     today = date.today()
     if mode in ("daily", "test"):
-        return "YESTERDAY"
+        yesterday = today - timedelta(days=1)
+        return "{},{}".format(yesterday.isoformat(), yesterday.isoformat())
     elif mode == "weekly":
-        return "LAST_7_DAYS"
+        end   = today - timedelta(days=1)
+        start = today - timedelta(days=7)
+        return "{},{}".format(start.isoformat(), end.isoformat())
     elif mode == "monthly":
         first_of_this = today.replace(day=1)
         last_of_prev  = first_of_this - timedelta(days=1)
@@ -427,7 +434,18 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=6
 
     log.info("Report queued. Polling every {}s (max {}s)...".format(poll_interval, max_wait))
 
-    # Step 2: Poll for completion
+    # Step 2: Snapshot existing job IDs so we only track the NEWLY queued report
+    existing_ids = set()
+    try:
+        for t in _query_task_list(session):
+            jid = t.get("jobId", "")
+            if jid:
+                existing_ids.add(jid)
+        log.info("Existing task snapshot: {} job(s) already in list.".format(len(existing_ids)))
+    except Exception as e:
+        log.warning("Could not snapshot task list: {}".format(e))
+
+    # Step 3: Poll for the NEW report (ignore any pre-existing jobs)
     deadline  = time.time() + max_wait
     found_job = None
 
@@ -435,12 +453,15 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=6
         time.sleep(poll_interval)
         tasks = _query_task_list(session)
         for task in tasks:
+            jid = task.get("jobId", "")
+            if jid in existing_ids:
+                continue   # skip old reports
             if config.REPORT_NAME.lower() in task.get("name", "").lower():
                 found_job = task
                 break
 
         if not found_job:
-            log.info("Not in task list yet -- waiting...")
+            log.info("New report not in task list yet -- waiting...")
             continue
 
         status = found_job.get("status", "")
@@ -452,7 +473,7 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=6
         elif status == "failed":
             raise RuntimeError("Atlas report FAILED: {}".format(found_job.get("message")))
 
-        found_job = None   # reset, keep polling
+        found_job = None   # still pending/processing, keep polling
     else:
         raise TimeoutError("Report did not complete within {} seconds.".format(max_wait))
 
