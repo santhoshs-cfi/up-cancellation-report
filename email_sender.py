@@ -398,13 +398,19 @@ This is an automated report. Do not reply to this email.
     )
 
     # ── MIME message ───────────────────────────────────────────────────────────
-    mode_label = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly",
-                  "test": "Daily"}.get(mode.lower(), "Daily")
+    is_test    = mode.lower() == "test"
+    mode_label = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}.get(
+        mode.lower(), "Daily")
     msg = MIMEMultipart()
     to_header      = ", ".join(to_email)
     msg["To"]      = to_header
-    msg["Subject"] = "[{zone} Zone] {label} Cancellation Report - {date}".format(
-        zone=zone, label=mode_label, date=date_str)
+    if is_test:
+        subject = "[TEST] [{zone} Zone] Cancellation Report - {date}".format(
+            zone=zone, date=date_str)
+    else:
+        subject = "[{zone} Zone] {label} Cancellation Report - {date}".format(
+            zone=zone, label=mode_label, date=date_str)
+    msg["Subject"] = subject
     msg.attach(MIMEText(body, "html", "utf-8"))
 
     if not use_drive:
