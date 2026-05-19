@@ -442,8 +442,15 @@ def process_csv(csv_bytes):
         export_df[col] = export_df[col].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
     export_df = export_df.fillna("")
 
+    # Label unmatched cancelled orders as "Other Cancellation" instead of dropping them
+    export_df.loc[
+        (export_df["Order Cancelled Time"] != "") &
+        (export_df["Cancellation Category"] == ""),
+        "Cancellation Category"
+    ] = "Other Cancellation"
+
     all_cancelled_df = export_df[
-        export_df["Cancellation Category"] != ""
+        export_df["Order Cancelled Time"] != ""
     ].reset_index(drop=True)
 
     print("Cancelled orders: {:,} rows (Sheet 1 of every zone Excel)".format(len(all_cancelled_df)))
