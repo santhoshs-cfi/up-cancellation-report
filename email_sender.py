@@ -232,34 +232,34 @@ def _td(text, align="center", alt=False, bold=False):
     return "<td {}>{}</td>".format(style.format(align + ";"), text)
 
 
-def _build_summary_html(pivot_df):
+def _build_kitchen_store_html(stores, zone):
+    """Builds a table of Kitchen Cancellation by Store for the given zone."""
+    if not stores:
+        return ""
     rows_html = ""
-    totals = {"Total Cancelled", "Total Orders"}
-    for i, (_, row) in enumerate(pivot_df.iterrows()):
-        cat   = str(row["Cancellation Category"])
-        count = "{:,}".format(int(row["Count"]))
-        p_ord = row["% of Total Orders"]
-        p_can = row["% of Total Cancelled"]
-        pct_o = "{:.2f}%".format(float(p_ord)) if str(p_ord) != "-" else "-"
-        pct_c = "{:.2f}%".format(float(p_can)) if str(p_can) != "-" else "-"
-        bold  = cat in totals
-        alt   = (i % 2 == 0) and not bold
-        rows_html += "<tr>{}{}{}{}</tr>".format(
-            _td(cat,   "left",   alt, bold),
-            _td(count, "center", alt, bold),
-            _td(pct_o, "center", alt, bold),
-            _td(pct_c, "center", alt, bold),
+    for i, s in enumerate(stores):
+        name  = str(s.get("Store Name", ""))
+        count = "{:,}".format(int(s.get("Count", 0)))
+        alt   = (i % 2 == 0)
+        rows_html += "<tr>{}{}</tr>".format(
+            _td(name,  "left",   alt),
+            _td(count, "center", alt),
         )
+    # Grand total row
+    grand = sum(int(s.get("Count", 0)) for s in stores)
+    rows_html += "<tr>{}{}</tr>".format(
+        _td("Grand Total", "left",   bold=True),
+        _td("{:,}".format(grand), "center", bold=True),
+    )
     return (
         "<h3 style='font-family:Arial;color:#1F4E79;margin:24px 0 6px'>"
-        "Cancellation Category Summary</h3>"
-        "<table style='{}'><tr>{}{}{}{}</tr>{}</table>"
+        "Kitchen Cancellation by Store &mdash; {} Zone</h3>"
+        "<table style='{}'><tr>{}{}</tr>{}</table>"
     ).format(
+        zone,
         _TABLE_CSS,
-        _th("Category",         "left"),
+        _th("Store Name", "left"),
         _th("Count"),
-        _th("% of Total Orders"),
-        _th("% of Total Cancelled"),
         rows_html,
     )
 
@@ -344,12 +344,12 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str,
         drive_link = _upload_to_drive(creds, excel_bytes, filename)
 
     # ── Build HTML email body ──────────────────────────────────────────────────
-    summary_html = ""
-    if pivot_df is not None:
+    kitchen_store_html = ""
+    if top3_stores:
         try:
-            summary_html = _build_summary_html(pivot_df)
+            kitchen_store_html = _build_kitchen_store_html(top3_stores, zone)
         except Exception as e:
-            log.warning("Could not build summary table: {}".format(e))
+            log.warning("Could not build kitchen store table: {}".format(e))
 
     zone_html = ""
     if zone_pivot_df is not None:
@@ -357,13 +357,6 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str,
             zone_html = _build_zone_html(zone_pivot_df)
         except Exception as e:
             log.warning("Could not build zone table: {}".format(e))
-
-    top3_html = ""
-    if top3_stores:
-        try:
-            top3_html = _build_top3_html(top3_stores, zone)
-        except Exception as e:
-            log.warning("Could not build top-3 block: {}".format(e))
 
     if use_drive:
         delivery_html = (
@@ -382,9 +375,8 @@ def send_zone_email(to_email, zone, excel_bytes, filename, date_str,
 Please find the <b>{zone} Zone</b> Cancellation Report for <b>{date}</b>.
 </p>
 {delivery}
-{summary}
+{kitchen_store}
 {zone_table}
-{top3}
 <p style='font-family:Arial;font-size:12px;color:#888;margin-top:32px'>
 This is an automated report. Do not reply to this email.
 </p>
@@ -392,9 +384,8 @@ This is an automated report. Do not reply to this email.
 """.format(
         zone=zone, date=date_str,
         delivery=delivery_html,
-        summary=summary_html,
+        kitchen_store=kitchen_store_html,
         zone_table=zone_html,
-        top3=top3_html,
     )
 
     # ── MIME message ───────────────────────────────────────────────────────────

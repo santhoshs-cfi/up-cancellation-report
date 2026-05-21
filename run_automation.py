@@ -201,7 +201,7 @@ def run_pipeline(session, mode):
             "direct attachment" if size_mb < 25 else "Google Drive link"
         ))
 
-    # Step 3: Build top-3 kitchen stores per zone (for email body)
+    # Step 3: Build kitchen store breakdown per zone (for email body)
     zone_kitchen_top3 = {}
     try:
         import io
@@ -214,9 +214,9 @@ def run_pipeline(session, mode):
         for zone in ["North", "South", "West"]:
             kdf = build_kitchen_zone_breakdown(df_raw, zone)
             if not kdf.empty:
-                zone_kitchen_top3[zone] = kdf.head(3).to_dict("records")
+                zone_kitchen_top3[zone] = kdf.to_dict("records")
     except Exception as e:
-        log.warning("Could not build kitchen top-3: {}".format(e))
+        log.warning("Could not build kitchen store breakdown: {}".format(e))
 
     # Step 4: Send emails (pass pivot tables for inline body display)
     log.info("Sending emails...")
