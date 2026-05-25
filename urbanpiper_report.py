@@ -386,7 +386,7 @@ def _query_task_list(session):
 
     payload = {
         "operationName": "getReportsTaskList",
-        "variables": {"limit": 50, "offset": 0, "filters": []},
+        "variables": {"limit": 200, "offset": 0, "filters": []},
         "query": GET_TASK_LIST_QUERY,
     }
     r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
@@ -399,7 +399,7 @@ def _query_task_list(session):
     return (resp_json.get("data") or {}).get("reportTaskList", {}).get("objects", [])
 
 
-def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=600):
+def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1200):
     """
     Generates the report via GraphQL, polls until complete, then downloads the CSV.
     Returns (csv_bytes, job_id).
@@ -477,7 +477,12 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=6
             jid = task.get("jobId", "")
             if jid in existing_ids:
                 continue   # skip old reports
-            if config.REPORT_NAME.lower() in task.get("name", "").lower():
+            # Match by timePeriod embedded in the task name, OR by report name alone
+            # The task name from Atlas typically contains the timePeriod string
+            task_name = task.get("name", "").lower()
+            time_period_matches = time_period.lower().replace(",", "") in task_name.replace(" ", "").replace(",", "")
+            report_name_matches = config.REPORT_NAME.lower() in task_name
+            if report_name_matches or time_period_matches:
                 found_job = task
                 break
 
