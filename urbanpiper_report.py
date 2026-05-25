@@ -215,6 +215,22 @@ def login_and_get_session():
 
             page.locator("button[type=submit], input[type=submit]").first.click()
 
+            # ── Step 3: Business selector (may appear if account has multiple businesses) ──
+            # Wait briefly to see if the business selector page appears
+            try:
+                page.wait_for_url("**/business**", timeout=8000)
+                log.info("Business selector page detected. URL: {}".format(page.url))
+                page.screenshot(path="login_step3b_business_selector.png")
+
+                # Click on "Eatfit - MOC"
+                eatfit_locator = page.locator("text=Eatfit - MOC")
+                eatfit_locator.wait_for(state="visible", timeout=10000)
+                eatfit_locator.click()
+                log.info("Clicked 'Eatfit - MOC' business.")
+            except Exception:
+                # Business selector did not appear — single business account, continue normally
+                log.info("No business selector — proceeding directly.")
+
             # Wait until we're back on atlas.urbanpiper.com (past all redirects)
             page.wait_for_function(
                 "window.location.hostname === 'atlas.urbanpiper.com' "
