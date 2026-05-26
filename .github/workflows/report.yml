@@ -74,6 +74,7 @@ jobs:
           NORTH_EMAIL:       ${{ secrets.CZ_NORTH_EMAIL }}
           SOUTH_EMAIL:       ${{ secrets.CZ_SOUTH_EMAIL }}
           WEST_EMAIL:        ${{ secrets.CZ_WEST_EMAIL }}
+          EAST_EMAIL:        ${{ secrets.CZ_EAST_EMAIL }}
           BUSINESS_NAME:     "CakeZone"
         run: python run_automation.py ${{ github.event.inputs.mode || 'smart' }}
 

@@ -59,6 +59,7 @@ def load_email_config():
     north = os.environ.get("NORTH_EMAIL", "")
     south = os.environ.get("SOUTH_EMAIL", "")
     west  = os.environ.get("WEST_EMAIL",  "")
+    east  = os.environ.get("EAST_EMAIL",  "")
 
     if north or south or west:
         log.info("Zone emails loaded from environment variables.")
@@ -67,6 +68,8 @@ def load_email_config():
             "South": _parse_emails(south),
             "West":  _parse_emails(west),
         }
+        if east:
+            mapping["East"] = _parse_emails(east)
         for zone, addrs in mapping.items():
             if not addrs:
                 log.warning("Env var missing for {} zone email.".format(zone))
@@ -88,6 +91,8 @@ def load_email_config():
         "South": _parse_emails(cfg.get("south_email", "")),
         "West":  _parse_emails(cfg.get("west_email",  "")),
     }
+    if cfg.get("east_email", ""):
+        mapping["East"] = _parse_emails(cfg.get("east_email", ""))
     for zone, addrs in mapping.items():
         if not addrs:
             log.warning("email_config.json: {} zone email is empty.".format(zone))
@@ -264,7 +269,11 @@ def _build_kitchen_store_html(stores, zone):
     )
 
 
-def _build_zone_html(zone_pivot_df, zones=("North", "South", "West")):
+def _build_zone_html(zone_pivot_df, zones=None):
+    if zones is None:
+        import os
+        business = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
+        zones = ("North", "South", "East", "West") if "cakezone" in business or "cake zone" in business else ("North", "South", "West")
     hdrs = _th("Category", "left")
     for z in zones:
         hdrs += _th(z) + _th("% " + z)

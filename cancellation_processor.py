@@ -18,8 +18,15 @@ _MAPPING_FILE = os.path.join(_SCRIPT_DIR, "keyword_mapping.xlsx")
 _ZONE_FILE_EATFIT   = os.path.join(_SCRIPT_DIR, "zone_city_mapping.xlsx")
 _ZONE_FILE_CAKEZONE = os.path.join(_SCRIPT_DIR, "cakezone_zone_city_mapping.xlsx")
 
-ZONES = ["North", "South", "West"]
-ZONE_HEADER_COLORS = {"North": "#1F4E79", "South": "#375623", "West": "#7B2D2D"}
+ZONES_EATFIT   = ["North", "South", "West"]
+ZONES_CAKEZONE = ["North", "South", "East", "West"]
+ZONE_HEADER_COLORS = {"North": "#1F4E79", "South": "#375623", "East": "#7B3F00", "West": "#7B2D2D"}
+
+def get_zones():
+    business = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
+    return ZONES_CAKEZONE if "cakezone" in business or "cake zone" in business else ZONES_EATFIT
+
+ZONES = ZONES_EATFIT  # default; overridden at runtime via get_zones()
 
 CATEGORIES = [
     "Auto Cancellation",
@@ -103,9 +110,9 @@ def load_keywords():
 
 
 def load_zone_mapping():
-    business = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
+    business  = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
     zone_file = _ZONE_FILE_CAKEZONE if "cakezone" in business or "cake zone" in business else _ZONE_FILE_EATFIT
-    print("Loading zone mapping for business='{}' -> {}".format(business, os.path.basename(zone_file)))
+    print("Zone mapping file: {}".format(os.path.basename(zone_file)))
     if os.path.exists(zone_file):
         try:
             zm = pd.read_excel(zone_file)
@@ -116,7 +123,7 @@ def load_zone_mapping():
             print("Zone mapping loaded: {} stores".format(len(zm)))
             return zm[["Store Name", "City", "Zone"]]
         except Exception as e:
-            print("Warning: could not load {} ({}). Using empty mapping.".format(os.path.basename(zone_file), e))
+            print("Warning: could not load {} ({})".format(os.path.basename(zone_file), e))
     return pd.DataFrame(columns=["Store Name", "City", "Zone"])
 
 
@@ -225,13 +232,14 @@ def build_pivot(df):
 
 
 def build_zone_pivot(df):
-    totals_by_zone = {z: max(len(df[df["Zone"] == z]), 1) for z in ZONES}
+    zones = get_zones()
+    totals_by_zone = {z: max(len(df[df["Zone"] == z]), 1) for z in zones}
     total_all = max(len(df), 1)
     rows = []
     for cat in CATEGORIES:
         row = {"Cancellation Category": cat}
         cat_grand = 0
-        for z in ZONES:
+        for z in zones:
             count = int((df[df["Zone"] == z]["Cancellation Category"] == cat).sum())
             row[z]        = count
             row["% " + z] = round(count / totals_by_zone[z] * 100, 2)
@@ -240,7 +248,7 @@ def build_zone_pivot(df):
         row["Overall %"]   = round(cat_grand / total_all * 100, 2)
         rows.append(row)
     grand = {"Cancellation Category": "Grand Total"}
-    for z in ZONES:
+    for z in zones:
         z_total     = len(df[df["Zone"] == z])
         z_cancelled = int((df[df["Zone"] == z]["Cancellation Category"] != "").sum())
         grand[z]        = z_total
@@ -248,7 +256,7 @@ def build_zone_pivot(df):
     grand["Grand Total"] = len(df)
     grand["Overall %"]   = round(int((df["Cancellation Category"] != "").sum()) / total_all * 100, 2)
     rows.append(grand)
-    col_order = ["Cancellation Category"] + [c for z in ZONES for c in [z, "% " + z]] + ["Grand Total", "Overall %"]
+    col_order = ["Cancellation Category"] + [c for z in zones for c in [z, "% " + z]] + ["Grand Total", "Overall %"]
     return pd.DataFrame(rows, columns=col_order)
 
 
@@ -422,6 +430,8 @@ def build_zonal_excel(all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zon
     ws2.set_column(6, 6, 12)
     ws2.set_column(7, 7, 14)
     ws2.set_column(8, 8, 12)
+    ws2.set_column(9, 9, 14)
+    ws2.set_column(10, 10, 12)
     ws2.freeze_panes(1, 0)
 
     writer.close()
@@ -460,7 +470,7 @@ def process_csv(csv_bytes):
     print("Cancelled orders: {:,} rows (Sheet 1 of every zone Excel)".format(len(all_cancelled_df)))
 
     zone_excels = {}
-    for zone in ZONES:
+    for zone in get_zones():
         kitchen_df = build_kitchen_zone_breakdown(df, zone)
         zone_excels[zone] = build_zonal_excel(
             all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zone
