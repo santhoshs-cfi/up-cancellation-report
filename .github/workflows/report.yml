@@ -2,11 +2,21 @@ name: UrbanPiper Automated Reports
 
 on:
   # Triggered by cron-job.org (2 jobs):
-  #   Job 1 — every day at 02:30 UTC (8:00 AM IST) -> mode: daily
-  #   Job 2 — cron 30 3 1 * 1  (Mon + 1st of month, 9:00 AM IST) -> mode: auto
-  # For manual testing, trigger from the Actions tab and pick a mode below.
+  #   Job 1 — every day at 02:30 UTC (8:00 AM IST)          -> business: eatfit, mode: daily
+  #   Job 2 — cron 30 3 1 * 1 (Mon + 1st, 9:00 AM IST)     -> business: eatfit, mode: auto
+  #   Job 3 — every day at 03:00 UTC (8:30 AM IST)          -> business: cakezone, mode: daily
+  #   Job 4 — cron 0 4 1 * 1  (Mon + 1st, 9:30 AM IST)     -> business: cakezone, mode: auto
+  # For manual testing, trigger from the Actions tab and pick business + mode below.
   workflow_dispatch:
     inputs:
+      business:
+        description: 'Which business to run'
+        required: false
+        default: 'eatfit'
+        type: choice
+        options:
+          - eatfit
+          - cakezone
       mode:
         description: 'Report mode to run'
         required: false
@@ -41,7 +51,8 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install chromium --with-deps
 
-      - name: Run full automation (generate -> download -> process -> email)
+      - name: Run Eatfit automation
+        if: ${{ (github.event.inputs.business || 'eatfit') == 'eatfit' }}
         env:
           UP_EMAIL:          ${{ secrets.UP_EMAIL }}
           UP_PASSWORD:       ${{ secrets.UP_PASSWORD }}
@@ -50,6 +61,20 @@ jobs:
           NORTH_EMAIL:       ${{ secrets.NORTH_EMAIL }}
           SOUTH_EMAIL:       ${{ secrets.SOUTH_EMAIL }}
           WEST_EMAIL:        ${{ secrets.WEST_EMAIL }}
+          BUSINESS_NAME:     "Eatfit - MOC"
+        run: python run_automation.py ${{ github.event.inputs.mode || 'smart' }}
+
+      - name: Run CakeZone automation
+        if: ${{ (github.event.inputs.business || 'eatfit') == 'cakezone' }}
+        env:
+          UP_EMAIL:          ${{ secrets.UP_EMAIL }}
+          UP_PASSWORD:       ${{ secrets.UP_PASSWORD }}
+          GMAIL_CREDENTIALS: ${{ secrets.GMAIL_CREDENTIALS }}
+          GMAIL_TOKEN:       ${{ secrets.GMAIL_TOKEN }}
+          NORTH_EMAIL:       ${{ secrets.CZ_NORTH_EMAIL }}
+          SOUTH_EMAIL:       ${{ secrets.CZ_SOUTH_EMAIL }}
+          WEST_EMAIL:        ${{ secrets.CZ_WEST_EMAIL }}
+          BUSINESS_NAME:     "CakeZone"
         run: python run_automation.py ${{ github.event.inputs.mode || 'smart' }}
 
       - name: Upload logs on failure
@@ -63,6 +88,7 @@ jobs:
             login_step1_loaded.png
             login_step2_email_filled.png
             login_step3_pwd_visible.png
+            login_step3b_business_selector.png
             login_step4_success.png
           if-no-files-found: ignore
           retention-days: 7

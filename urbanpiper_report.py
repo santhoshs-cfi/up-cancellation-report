@@ -222,11 +222,13 @@ def login_and_get_session():
                 log.info("Business selector page detected. URL: {}".format(page.url))
                 page.screenshot(path="login_step3b_business_selector.png")
 
-                # Click on "Eatfit - MOC"
-                eatfit_locator = page.locator("text=Eatfit - MOC")
-                eatfit_locator.wait_for(state="visible", timeout=10000)
-                eatfit_locator.click()
-                log.info("Clicked 'Eatfit - MOC' business.")
+                # Click the correct business (defaults to "Eatfit - MOC" if not set)
+                business_name = os.environ.get("BUSINESS_NAME", "Eatfit - MOC")
+                log.info("Selecting business: {}".format(business_name))
+                biz_locator = page.locator("text={}".format(business_name))
+                biz_locator.wait_for(state="visible", timeout=10000)
+                biz_locator.click()
+                log.info("Clicked '{}' business.".format(business_name))
             except Exception:
                 # Business selector did not appear — single business account, continue normally
                 log.info("No business selector — proceeding directly.")
@@ -402,7 +404,7 @@ def _query_task_list(session):
 
     payload = {
         "operationName": "getReportsTaskList",
-        "variables": {"limit": 200, "offset": 0, "filters": []},
+        "variables": {"limit": 100, "offset": 0, "filters": []},
         "query": GET_TASK_LIST_QUERY,
     }
     r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
