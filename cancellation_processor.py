@@ -15,7 +15,8 @@ import pandas as pd
 
 _SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 _MAPPING_FILE = os.path.join(_SCRIPT_DIR, "keyword_mapping.xlsx")
-_ZONE_FILE    = os.path.join(_SCRIPT_DIR, "zone_city_mapping.xlsx")
+_ZONE_FILE_EATFIT   = os.path.join(_SCRIPT_DIR, "zone_city_mapping.xlsx")
+_ZONE_FILE_CAKEZONE = os.path.join(_SCRIPT_DIR, "cakezone_zone_city_mapping.xlsx")
 
 ZONES = ["North", "South", "West"]
 ZONE_HEADER_COLORS = {"North": "#1F4E79", "South": "#375623", "West": "#7B2D2D"}
@@ -102,9 +103,12 @@ def load_keywords():
 
 
 def load_zone_mapping():
-    if os.path.exists(_ZONE_FILE):
+    business = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
+    zone_file = _ZONE_FILE_CAKEZONE if "cakezone" in business or "cake zone" in business else _ZONE_FILE_EATFIT
+    print("Loading zone mapping for business='{}' -> {}".format(business, os.path.basename(zone_file)))
+    if os.path.exists(zone_file):
         try:
-            zm = pd.read_excel(_ZONE_FILE)
+            zm = pd.read_excel(zone_file)
             zm.columns = [c.strip() for c in zm.columns]
             zm["Store Name"] = zm["Store Name"].astype(str).str.strip()
             zm["City"]       = zm["City"].astype(str).str.strip()
@@ -112,7 +116,7 @@ def load_zone_mapping():
             print("Zone mapping loaded: {} stores".format(len(zm)))
             return zm[["Store Name", "City", "Zone"]]
         except Exception as e:
-            print("Warning: could not load zone_city_mapping.xlsx ({})".format(e))
+            print("Warning: could not load {} ({}). Using empty mapping.".format(os.path.basename(zone_file), e))
     return pd.DataFrame(columns=["Store Name", "City", "Zone"])
 
 
