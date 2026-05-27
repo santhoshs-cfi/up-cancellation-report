@@ -472,7 +472,6 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
                 "emails":       [notify_email],
                 "filters": {
                     "platforms":   config.PLATFORMS,
-                    "locations":   location_ids,
                     "orderStates": config.ORDER_STATES,
                     "timePeriod":  time_period,
                 },
@@ -481,6 +480,9 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
         },
         "query": GENERATE_REPORT_MUTATION,
     }
+    
+    if location_ids:
+        payload["variables"]["input"]["filters"]["locations"] = location_ids
     r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
                       cookies=cookies, timeout=30)
     r.raise_for_status()
