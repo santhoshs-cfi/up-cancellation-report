@@ -348,6 +348,14 @@ def generate_report(session, time_period):
     token   = session.get("token")
     headers = _make_headers(token)
 
+    # For CakeZone: don't filter by location IDs (they are EatFit-specific).
+    # An empty list tells Atlas to return all locations for the current business.
+    business     = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
+    location_ids = [] if ("cakezone" in business or "cake zone" in business) else config.LOCATION_IDS
+    log.info("Location filter: {} IDs ({})".format(
+        len(location_ids) if location_ids else "ALL",
+        os.environ.get("BUSINESS_NAME", "Eatfit - MOC")))
+
     payload = {
         "operationName": "generateReport",
         "variables": {
@@ -358,7 +366,7 @@ def generate_report(session, time_period):
                 "emails":       config.REPORT_EMAILS,
                 "filters": {
                     "platforms":   config.PLATFORMS,
-                    "locations":   config.LOCATION_IDS,
+                    "locations":   location_ids,
                     "orderStates": config.ORDER_STATES,
                     "timePeriod":  time_period,
                 },
@@ -445,6 +453,15 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
     # to that inbox (can be ignored — our processed zone reports go out separately).
     notify_email = config.UP_EMAIL
     log.info("Queuing report | timePeriod={} | notify={}".format(time_period, notify_email))
+
+    # For CakeZone: don't filter by location IDs (they are EatFit-specific).
+    # An empty list tells Atlas to return all locations for the current business.
+    business     = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
+    location_ids = [] if ("cakezone" in business or "cake zone" in business) else config.LOCATION_IDS
+    log.info("Location filter: {} IDs ({})".format(
+        len(location_ids) if location_ids else "ALL",
+        os.environ.get("BUSINESS_NAME", "Eatfit - MOC")))
+
     payload = {
         "operationName": "generateReport",
         "variables": {
@@ -455,7 +472,7 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
                 "emails":       [notify_email],
                 "filters": {
                     "platforms":   config.PLATFORMS,
-                    "locations":   config.LOCATION_IDS,
+                    "locations":   location_ids,
                     "orderStates": config.ORDER_STATES,
                     "timePeriod":  time_period,
                 },
