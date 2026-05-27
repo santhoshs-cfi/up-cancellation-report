@@ -147,12 +147,14 @@ def add_zone_city(df, zone_df):
         # All sub-brands share the same location prefix → same zone.
         # So we match on the location prefix (first segment before " - ").
         _zm = zone_df.copy()
-        _zm["_prefix"] = _zm["Store Name"].str.split(" - ").str[0].str.strip()
+        # Use lowercase prefix for case-insensitive matching
+        # (e.g. "BELTOLA - Cake Zone - Online" in mapping vs "Beltola - ..." in CSV)
+        _zm["_prefix"] = _zm["Store Name"].str.split(" - ").str[0].str.strip().str.lower()
         prefix_map = (
             _zm.drop_duplicates("_prefix")
                .set_index("_prefix")[["City", "Zone"]]
         )
-        df["_prefix"] = df["Store Name"].str.split(" - ").str[0].str.strip()
+        df["_prefix"] = df["Store Name"].str.split(" - ").str[0].str.strip().str.lower()
         merged = df.merge(prefix_map, left_on="_prefix", right_index=True, how="left")
         merged = merged.drop(columns=["_prefix"])
     else:
