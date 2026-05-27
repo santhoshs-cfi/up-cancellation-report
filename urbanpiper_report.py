@@ -454,10 +454,10 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
     notify_email = config.UP_EMAIL
     log.info("Queuing report | timePeriod={} | notify={}".format(time_period, notify_email))
 
-    # For CakeZone: don't filter by location IDs (they are EatFit-specific).
-    # An empty list tells Atlas to return all locations for the current business.
+    # For CakeZone: use CAKEZONE_LOCATION_IDS (2000+ IDs from their HAR file).
+    # For EatFit: use LOCATION_IDS
     business     = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
-    location_ids = [] if ("cakezone" in business or "cake zone" in business) else config.LOCATION_IDS
+    location_ids = getattr(config, "CAKEZONE_LOCATION_IDS", []) if ("cakezone" in business or "cake zone" in business) else config.LOCATION_IDS
     log.info("Location filter: {} IDs ({})".format(
         len(location_ids) if location_ids else "ALL",
         os.environ.get("BUSINESS_NAME", "Eatfit - MOC")))
@@ -472,6 +472,7 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
                 "emails":       [notify_email],
                 "filters": {
                     "platforms":   config.PLATFORMS,
+                    "locations":   location_ids,
                     "orderStates": config.ORDER_STATES,
                     "timePeriod":  time_period,
                 },
@@ -481,8 +482,6 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
         "query": GENERATE_REPORT_MUTATION,
     }
     
-    if location_ids:
-        payload["variables"]["input"]["filters"]["locations"] = location_ids
     r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
                       cookies=cookies, timeout=30)
     r.raise_for_status()
