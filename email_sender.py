@@ -404,12 +404,15 @@ This is an automated report. Do not reply to this email.
     msg = MIMEMultipart()
     to_header      = ", ".join(to_email)
     msg["To"]      = to_header
+    business = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
+    biz_prefix = "[CakeZone] " if ("cakezone" in business or "cake zone" in business) else ""
+
     if is_test:
-        subject = "[TEST] [{zone} Zone] Cancellation Report - {date}".format(
-            zone=zone, date=date_str)
+        subject = "{biz}[TEST] [{zone} Zone] Cancellation Report - {date}".format(
+            biz=biz_prefix, zone=zone, date=date_str)
     else:
-        subject = "[{zone} Zone] {label} Cancellation Report - {date}".format(
-            zone=zone, label=mode_label, date=date_str)
+        subject = "{biz}[{zone} Zone] {label} Cancellation Report - {date}".format(
+            biz=biz_prefix, zone=zone, label=mode_label, date=date_str)
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "html", "utf-8"))
 
