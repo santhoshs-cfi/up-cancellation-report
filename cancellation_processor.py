@@ -133,7 +133,31 @@ def add_zone_city(df, zone_df):
         df["City"] = "Unknown"
         df["Zone"] = "Unknown"
         return df
-    merged = df.merge(zone_df, on="Store Name", how="left")
+
+    business    = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
+    is_cakezone = "cakezone" in business or "cake zone" in business
+
+    if is_cakezone:
+        # CakeZone account has multiple sub-brands:
+        #   "Kothrud - Cake Zone - Online"
+        #   "Kothrud - OvenFresh - Online"
+        #   "Kothrud - The Dessert Heaven - Online"
+        #   "Kothrud - Cheesecakes By CakeZone - Online"
+        # The zone mapping only lists the "Cake Zone" branded variant.
+        # All sub-brands share the same location prefix → same zone.
+        # So we match on the location prefix (first segment before " - ").
+        _zm = zone_df.copy()
+        _zm["_prefix"] = _zm["Store Name"].str.split(" - ").str[0].str.strip()
+        prefix_map = (
+            _zm.drop_duplicates("_prefix")
+               .set_index("_prefix")[["City", "Zone"]]
+        )
+        df["_prefix"] = df["Store Name"].str.split(" - ").str[0].str.strip()
+        merged = df.merge(prefix_map, left_on="_prefix", right_index=True, how="left")
+        merged = merged.drop(columns=["_prefix"])
+    else:
+        merged = df.merge(zone_df, on="Store Name", how="left")
+
     merged["City"] = merged["City"].fillna("Unknown")
     merged["Zone"] = merged["Zone"].fillna("Unknown")
     cols = [c for c in merged.columns if c not in ("City", "Zone")]
