@@ -405,7 +405,10 @@ This is an automated report. Do not reply to this email.
     to_header      = ", ".join(to_email)
     msg["To"]      = to_header
     business = os.environ.get("BUSINESS_NAME", "Eatfit - MOC").strip().lower()
-    biz_prefix = "[CakeZone] " if ("cakezone" in business or "cake zone" in business) else ""
+    if "cakezone" in business or "cake zone" in business:
+        biz_prefix = "[CakeZone] "
+    else:
+        biz_prefix = "[EatFit] "
 
     if is_test:
         subject = "{biz}[TEST] [{zone} Zone] Cancellation Report - {date}".format(
