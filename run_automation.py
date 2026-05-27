@@ -67,7 +67,7 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from cancellation_processor import process_csv, build_kitchen_zone_breakdown
+    from cancellation_processor import process_csv, build_kitchen_zone_breakdown, get_zones
 except ImportError as e:
     log.error("Could not import from cancellation_processor.py: {}".format(e))
     sys.exit(1)
@@ -211,7 +211,7 @@ def run_pipeline(session, mode):
         zone_df = load_zone_mapping()
         df_raw  = add_zone_city(df_raw, zone_df)
         df_raw  = categorize_all(df_raw)
-        for zone in ["North", "South", "West"]:
+        for zone in get_zones():
             kdf = build_kitchen_zone_breakdown(df_raw, zone)
             if not kdf.empty:
                 zone_kitchen_top3[zone] = kdf.to_dict("records")

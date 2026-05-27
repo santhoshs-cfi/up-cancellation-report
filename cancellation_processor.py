@@ -369,8 +369,9 @@ def build_zonal_excel(all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zon
     r += 1
 
     # Section 2: Zone breakdown
+    _zones = get_zones()
     zone_hdrs = (["Cancellation Category"] +
-                 [c for z in ZONES for c in [z, "% " + z]] +
+                 [c for z in _zones for c in [z, "% " + z]] +
                  ["Grand Total", "Overall %"])
     ws2.merge_range(r, 0, r, len(zone_hdrs) - 1, "  Zone-wise Cancellation Breakdown", f["title2"])
     ws2.set_row(r, 24); r += 1
@@ -385,7 +386,7 @@ def build_zonal_excel(all_cancelled_df, pivot_df, zone_pivot_df, kitchen_df, zon
         even     = (ri % 2 == 0)
         ws2.write(r, 0, cat, f["tot_l"] if is_grand else (f["alt_l"] if even else f["body_l"]))
         col = 1; vi = 1
-        for _ in ZONES:
+        for _ in _zones:
             cnt_v = vals[vi]; vi += 1
             pct_v = float(vals[vi]); vi += 1
             if is_grand:
