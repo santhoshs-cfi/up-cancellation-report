@@ -37,7 +37,8 @@ _GMAIL_SCOPES = [
 ]
 
 # Files larger than this go to Google Drive instead of direct attachment
-SIZE_LIMIT_BYTES = 25 * 1024 * 1024   # 25 MB
+# Gmail API has a 25MB limit on the total request size including base64 encoding.
+SIZE_LIMIT_BYTES = 15 * 1024 * 1024   # 15 MB
 
 
 # ==============================================================================

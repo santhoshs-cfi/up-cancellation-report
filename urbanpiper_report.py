@@ -422,7 +422,36 @@ def _query_task_list(session):
     if resp_json.get("data") is None:
         log.error("getReportsTaskList returned data=null: {}".format(r.text[:300]))
         return []
-    return (resp_json.get("data") or {}).get("reportTaskList", {}).get("objects", [])
+    
+    data = (resp_json.get("data") or {}).get("reportTaskList", {})
+    count = data.get("count", 0)
+    all_objects = data.get("objects", [])
+    
+    # Fast-forward jump: if there are multiple pages, jump directly to the last page block.
+    # This avoids fetching all 50+ pages sequentially, while the while loop below
+    # guarantees we don't miss anything if the count is slightly inaccurate.
+    if count > 100:
+        offset = (count // 100) * 100
+        # Discard the first page, we only care about the latest tasks at the end
+        all_objects = []
+        while True:
+            payload["variables"]["offset"] = offset
+            r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
+                              cookies=cookies, timeout=30)
+            r.raise_for_status()
+            resp_json = r.json()
+            if resp_json.get("data") is None:
+                break
+                
+            data = (resp_json.get("data") or {}).get("reportTaskList", {})
+            objects = data.get("objects", [])
+            all_objects.extend(objects)
+            
+            if len(objects) < 100:
+                break
+            offset += 100
+            
+    return all_objects
 
 
 def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1200):
@@ -513,14 +542,9 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
             jid = task.get("jobId", "")
             if jid in existing_ids:
                 continue   # skip old reports
-            # Match by timePeriod embedded in the task name, OR by report name alone
-            # The task name from Atlas typically contains the timePeriod string
-            task_name = task.get("name", "").lower()
-            time_period_matches = time_period.lower().replace(",", "") in task_name.replace(" ", "").replace(",", "")
-            report_name_matches = config.REPORT_NAME.lower() in task_name
-            if report_name_matches or time_period_matches:
-                found_job = task
-                break
+            # Since we just queued a new report, the first task not in existing_ids is ours.
+            found_job = task
+            break
 
         if not found_job:
             log.info("New report not in task list yet -- waiting...")
