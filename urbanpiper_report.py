@@ -196,7 +196,8 @@ def login_and_get_session():
             email_sel = (
                 "input[type=email], input[type=text], input[name=email], "
                 "input[name=username], input[placeholder*=mail i], "
-                "input[placeholder*=mobile i], input[placeholder*=email i]"
+                "input[placeholder*=mobile i], input[placeholder*=email i], "
+                "input:not([type=hidden])"
             )
             page.wait_for_selector(email_sel, state="visible", timeout=45000)
             log.info("Email field visible. URL: {}".format(page.url))
