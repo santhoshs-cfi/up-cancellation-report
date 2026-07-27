@@ -193,16 +193,13 @@ def login_and_get_session():
             log.info("Initial URL: {}".format(page.url))
 
             # ── Step 1: Email / Mobile input ──────────────────────────────────
-            email_sel = (
-                "input[type=email], input[type=text], input[name=email], "
-                "input[name=username], input[placeholder*=mail i], "
-                "input[placeholder*=mobile i], input[placeholder*=email i], "
-                "input:not([type=hidden])"
-            )
-            page.wait_for_selector(email_sel, state="visible", timeout=45000)
+            email_sel = "input[name='email_mobile'], input[name='email'], input[type='email']"
+            
+            email_locator = page.locator(email_sel).first
+            email_locator.wait_for(state="visible", timeout=45000)
             log.info("Email field visible. URL: {}".format(page.url))
             page.screenshot(path="login_step1_loaded.png")
-            page.locator(email_sel).first.fill(config.UP_EMAIL)
+            email_locator.fill(config.UP_EMAIL)
             page.screenshot(path="login_step2_email_filled.png")
 
             page.locator("button[type=submit], input[type=submit]").first.click()
