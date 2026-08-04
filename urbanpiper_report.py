@@ -193,25 +193,28 @@ def login_and_get_session():
             log.info("Initial URL: {}".format(page.url))
 
             # ── Step 1: Email / Mobile input ──────────────────────────────────
-            email_sel = "input[name='email_mobile'], input[name='email'], input[type='email']"
+            email_sel = (
+                "input[name='email_mobile']:visible, input[name='email']:visible, "
+                "input[type='email']:visible, input[type='text']:visible"
+            )
             
             email_locator = page.locator(email_sel).first
-            email_locator.wait_for(state="visible", timeout=45000)
+            email_locator.wait_for(state="attached", timeout=45000)
             log.info("Email field visible. URL: {}".format(page.url))
             page.screenshot(path="login_step1_loaded.png")
             email_locator.fill(config.UP_EMAIL)
             page.screenshot(path="login_step2_email_filled.png")
 
-            page.locator("button[type=submit], input[type=submit]").first.click()
+            page.locator("button[type=submit]:visible, input[type=submit]:visible").first.click()
             log.info("Clicked continue.")
 
             # ── Step 2: Password field ─────────────────────────────────────────
-            page.wait_for_selector("input[type=password]", state="visible", timeout=30000)
+            page.wait_for_selector("input[type=password]:visible", state="attached", timeout=30000)
             log.info("Password field visible. URL: {}".format(page.url))
             page.screenshot(path="login_step3_pwd_visible.png")
-            page.locator("input[type=password]").first.fill(config.UP_PASSWORD)
+            page.locator("input[type=password]:visible").first.fill(config.UP_PASSWORD)
 
-            page.locator("button[type=submit], input[type=submit]").first.click()
+            page.locator("button[type=submit]:visible, input[type=submit]:visible").first.click()
 
             # ── Step 3: Business selector (may appear if account has multiple businesses) ──
             # Wait briefly to see if the business selector page appears
