@@ -186,7 +186,28 @@ def run_pipeline(session, mode):
     log.info("CSV ready - {:,} bytes | jobId={}".format(len(csv_bytes), job_id))
 
     # Step 1b: Validate that the downloaded CSV actually covers the expected date range
-    _validate_csv_dates(csv_bytes, mode, time_period)
+    try:
+        _validate_csv_dates(csv_bytes, mode, time_period)
+    except ValueError:
+        # UrbanPiper occasionally serves an old cached file for the YESTERDAY
+        # shortcut. Requesting the same day as an explicit range forces a fresh
+        # report. Keep the validation in place so an incorrect file is never sent.
+        if mode not in ("daily", "test") or time_period != "YESTERDAY":
+            raise
+
+        report_day = date.today() - timedelta(days=1)
+        fresh_time_period = "{0},{0}".format(report_day.isoformat())
+        log.warning(
+            "Cached YESTERDAY report had the wrong date range. Retrying with "
+            "explicit period {}.".format(fresh_time_period)
+        )
+        delete_session()
+        session = login_and_get_session()
+        csv_bytes, job_id = generate_and_download_csv(session, fresh_time_period)
+        log.info("Explicit-date CSV ready - {:,} bytes | jobId={}".format(
+            len(csv_bytes), job_id
+        ))
+        _validate_csv_dates(csv_bytes, mode, fresh_time_period)
 
     # Step 2: Process CSV -> zone Excel files
     log.info("Processing CSV...")
