@@ -87,6 +87,7 @@ jobs:
             automation.log
             login_debug.png
             login_step1_loaded.png
+            login_step1_attempt*_failed.png
             login_step2_email_filled.png
             login_step3_pwd_visible.png
             login_step3b_business_selector.png

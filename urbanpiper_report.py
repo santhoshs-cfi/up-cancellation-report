@@ -188,18 +188,35 @@ def login_and_get_session():
         page.on("response", handle_response)
 
         try:
-            # Navigate to Atlas — JS-redirects to login.urbanpiper.com
-            page.goto(config.ATLAS_LOGIN_URL, wait_until="commit", timeout=30000)
-            log.info("Initial URL: {}".format(page.url))
-
             # ── Step 1: Email / Mobile input ──────────────────────────────────
+            # Atlas occasionally returns a blank page to a fresh GitHub-hosted
+            # browser. Re-request it a few times before treating that as a login
+            # failure. No credentials are submitted until the form is visible.
             email_sel = (
                 "input[name='email_mobile']:visible, input[name='email']:visible, "
                 "input[type='email']:visible, input[type='text']:visible"
             )
-            
-            email_locator = page.locator(email_sel).first
-            email_locator.wait_for(state="attached", timeout=45000)
+
+            email_locator = None
+            for attempt in range(1, 4):
+                page.goto(config.ATLAS_LOGIN_URL, wait_until="commit", timeout=30000)
+                log.info("Initial URL (attempt {}/3): {}".format(attempt, page.url))
+                candidate = page.locator(email_sel).first
+                try:
+                    candidate.wait_for(state="attached", timeout=45000)
+                    email_locator = candidate
+                    break
+                except Exception as e:
+                    page.screenshot(path="login_step1_attempt{}_failed.png".format(attempt))
+                    log.warning(
+                        "Email field did not load (attempt {}/3): {} | URL: {}".format(
+                            attempt, e, page.url
+                        )
+                    )
+                    if attempt == 3:
+                        raise
+                    page.wait_for_timeout(3000)
+
             log.info("Email field visible. URL: {}".format(page.url))
             page.screenshot(path="login_step1_loaded.png")
             email_locator.fill(config.UP_EMAIL)
