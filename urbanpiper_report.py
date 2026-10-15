@@ -144,6 +144,33 @@ def delete_session():
 #  PLAYWRIGHT LOGIN
 # ==============================================================================
 
+def _wait_for_atlas_token(page, captured_token):
+    """Wait for Atlas authentication, reloading once if its callback stalls."""
+    for attempt in range(2):
+        for _ in range(12):
+            if captured_token["value"]:
+                return
+            page.wait_for_timeout(1000)
+
+        if captured_token["value"]:
+            return
+        try:
+            storage = page.evaluate("() => Object.assign({}, localStorage)")
+            for key, val in storage.items():
+                if isinstance(val, str) and val.startswith("eyJ") and len(val.split(".")) == 3:
+                    captured_token["value"] = val
+                    log.info("Found JWT in localStorage.")
+                    return
+        except Exception:
+            log.warning("Could not read Atlas token from localStorage.")
+
+        if attempt == 0:
+            log.warning("Atlas session token missing after redirect. Reloading page once...")
+            page.reload(wait_until="commit", timeout=30000)
+
+    raise RuntimeError("Atlas did not provide a JWT token after one page reload.")
+
+
 def login_and_get_session():
     """
     Logs in via Playwright headless browser.
@@ -262,35 +289,10 @@ def login_and_get_session():
                 "&& window.location.pathname !== '/login'",
                 timeout=45000
             )
+            log.info("Returned to Atlas; waiting for session token.")
+            _wait_for_atlas_token(page, captured_token)
             page.screenshot(path="login_step4_success.png")
-            log.info("Login successful! URL: {}".format(page.url))
-
-            # Give the SPA time to fire authServiceLogin and store the token.
-            # The callback page can reach Atlas before its API call finishes,
-            # especially on a GitHub-hosted runner.
-            for _ in range(12):
-                if captured_token["value"]:
-                    break
-                page.wait_for_timeout(1000)
-
-            # Fallback: try to read token directly from localStorage
-            if not captured_token["value"]:
-                log.info("Trying to read token from localStorage...")
-                try:
-                    storage_json = page.evaluate(
-                        "() => JSON.stringify(Object.assign({}, localStorage))"
-                    )
-                    storage = json.loads(storage_json)
-                    log.info("localStorage keys: {}".format(list(storage.keys())))
-                    for key, val in storage.items():
-                        if isinstance(val, str) and len(val) > 50:
-                            # JWT tokens are long base64 strings
-                            if val.startswith("eyJ") or "token" in key.lower() or "auth" in key.lower():
-                                captured_token["value"] = val
-                                log.info("Found token in localStorage key: {}".format(key))
-                                break
-                except Exception as e:
-                    log.warning("localStorage read failed: {}".format(e))
+            log.info("Login successful: Atlas session token captured.")
 
         except Exception as e:
             page.screenshot(path="login_debug.png")
