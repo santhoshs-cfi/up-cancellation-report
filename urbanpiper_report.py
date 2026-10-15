@@ -198,11 +198,16 @@ def login_and_get_session():
             )
 
             email_locator = None
-            for attempt in range(1, 4):
-                page.goto(config.ATLAS_LOGIN_URL, wait_until="commit", timeout=30000)
-                log.info("Initial URL (attempt {}/3): {}".format(attempt, page.url))
-                candidate = page.locator(email_sel).first
+            login_urls = [
+                config.ATLAS_LOGIN_URL,
+                "https://login.urbanpiper.com/login/email-mobile/?redirect=atlas",
+                config.ATLAS_LOGIN_URL,
+            ]
+            for attempt, login_url in enumerate(login_urls, 1):
                 try:
+                    page.goto(login_url, wait_until="commit", timeout=30000)
+                    log.info("Initial URL (attempt {}/3): {}".format(attempt, page.url))
+                    candidate = page.locator(email_sel).first
                     candidate.wait_for(state="attached", timeout=45000)
                     email_locator = candidate
                     break
@@ -614,6 +619,8 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
 # ==============================================================================
 
 def get_session_with_retry():
+    from playwright.sync_api import Error as PlaywrightError
+
     session = load_cached_session()
     if session:
         return session
@@ -622,7 +629,7 @@ def get_session_with_retry():
     for attempt in range(1, 4):
         try:
             return login_and_get_session()
-        except RuntimeError as e:
+        except (RuntimeError, PlaywrightError) as e:
             last_error = e
             log.warning("Login session attempt {}/3 failed: {}".format(attempt, e))
             if attempt < 3:
