@@ -260,8 +260,13 @@ def login_and_get_session():
             page.screenshot(path="login_step4_success.png")
             log.info("Login successful! URL: {}".format(page.url))
 
-            # Give the SPA a moment to fire authServiceLogin and store the token
-            page.wait_for_timeout(3000)
+            # Give the SPA time to fire authServiceLogin and store the token.
+            # The callback page can reach Atlas before its API call finishes,
+            # especially on a GitHub-hosted runner.
+            for _ in range(12):
+                if captured_token["value"]:
+                    break
+                page.wait_for_timeout(1000)
 
             # Fallback: try to read token directly from localStorage
             if not captured_token["value"]:
@@ -298,8 +303,9 @@ def login_and_get_session():
     if token:
         log.info("JWT token captured successfully (length {}).".format(len(token)))
     else:
-        log.warning("No JWT token captured — API calls may fail. "
-                    "Proceeding with cookies-only session.")
+        # The report APIs need this token. Returning a cookies-only session
+        # turns an authentication issue into a confusing GraphQL null error.
+        raise RuntimeError("Login completed but Atlas did not provide a JWT token.")
 
     session = {"cookies": cookies, "token": token}
     save_session(session)
@@ -539,7 +545,14 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
         errors = resp_json.get("errors", [])
         raise RuntimeError("generateReportV2 failed (data=null). errors={}".format(errors))
 
-    gql = (resp_json.get("data") or {}).get("generateReportV2", {}).get("status", {})
+    generate_result = (resp_json.get("data") or {}).get("generateReportV2")
+    if not isinstance(generate_result, dict):
+        errors = resp_json.get("errors", [])
+        raise RuntimeError(
+            "generateReportV2 returned an empty result. errors={}".format(errors)
+        )
+
+    gql = generate_result.get("status") or {}
     if not gql.get("success"):
         raise RuntimeError("generateReportV2 failed: {}".format(gql.get("messages")))
 
@@ -605,7 +618,16 @@ def get_session_with_retry():
     if session:
         return session
     log.info("No cached session -- fresh login...")
-    return login_and_get_session()
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            return login_and_get_session()
+        except RuntimeError as e:
+            last_error = e
+            log.warning("Login session attempt {}/3 failed: {}".format(attempt, e))
+            if attempt < 3:
+                time.sleep(5)
+    raise last_error
 
 
 # Backward-compat alias (run_automation.py imports get_cookies_with_retry)

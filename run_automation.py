@@ -180,7 +180,7 @@ def run_pipeline(session, mode):
     except Exception as e:
         log.warning("Download failed ({}). Re-logging in...".format(e))
         delete_session()
-        session   = login_and_get_session()
+        session   = get_session_with_retry()
         csv_bytes, job_id = generate_and_download_csv(session, time_period)
 
     log.info("CSV ready - {:,} bytes | jobId={}".format(len(csv_bytes), job_id))
@@ -202,8 +202,16 @@ def run_pipeline(session, mode):
             "explicit period {}.".format(fresh_time_period)
         )
         delete_session()
-        session = login_and_get_session()
-        csv_bytes, job_id = generate_and_download_csv(session, fresh_time_period)
+        session = get_session_with_retry()
+        try:
+            csv_bytes, job_id = generate_and_download_csv(session, fresh_time_period)
+        except Exception as e:
+            log.warning(
+                "Explicit-date report request failed ({}). Re-logging in once.".format(e)
+            )
+            delete_session()
+            session = get_session_with_retry()
+            csv_bytes, job_id = generate_and_download_csv(session, fresh_time_period)
         log.info("Explicit-date CSV ready - {:,} bytes | jobId={}".format(
             len(csv_bytes), job_id
         ))
