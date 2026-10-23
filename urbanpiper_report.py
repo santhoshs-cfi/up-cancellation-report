@@ -446,42 +446,33 @@ def _query_task_list(session):
         "variables": {"limit": 100, "offset": 0, "filters": []},
         "query": GET_TASK_LIST_QUERY,
     }
-    r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
-                      cookies=cookies, timeout=30)
-    r.raise_for_status()
-    resp_json = r.json()
-    if resp_json.get("data") is None:
-        log.error("getReportsTaskList returned data=null: {}".format(r.text[:300]))
-        return []
-    
-    data = (resp_json.get("data") or {}).get("reportTaskList", {})
-    count = data.get("count", 0)
-    all_objects = data.get("objects", [])
-    
-    # Fast-forward jump: if there are multiple pages, jump directly to the last page block.
-    # This avoids fetching all 50+ pages sequentially, while the while loop below
-    # guarantees we don't miss anything if the count is slightly inaccurate.
-    if count > 100:
-        offset = (count // 100) * 100
-        # Discard the first page, we only care about the latest tasks at the end
-        all_objects = []
-        while True:
-            payload["variables"]["offset"] = offset
-            r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
-                              cookies=cookies, timeout=30)
-            r.raise_for_status()
-            resp_json = r.json()
-            if resp_json.get("data") is None:
-                break
-                
-            data = (resp_json.get("data") or {}).get("reportTaskList", {})
-            objects = data.get("objects", [])
-            all_objects.extend(objects)
-            
-            if len(objects) < 100:
-                break
-            offset += 100
-            
+    # Read every page: the API's ordering must not determine which old jobs
+    # are excluded from the pre-queue snapshot. A last-page-only scan can
+    # mistake an old job shifted across a page boundary for a newly queued job.
+    all_objects = []
+    offset = 0
+    while True:
+        payload["variables"]["offset"] = offset
+        r = requests.post(config.ATLAS_GRAPHQL_URL, json=payload, headers=headers,
+                          cookies=cookies, timeout=30)
+        r.raise_for_status()
+        resp_json = r.json()
+        data = (resp_json.get("data") or {}).get("reportTaskList")
+        if resp_json.get("errors") or not isinstance(data, dict):
+            raise RuntimeError("Report history query failed; cannot identify new report safely.")
+        objects = data.get("objects")
+        count = data.get("count")
+        if not isinstance(objects, list) or not isinstance(count, int):
+            raise RuntimeError("Report history query returned invalid pagination data.")
+        if not objects:
+            if offset < count:
+                raise RuntimeError("Report history query returned an incomplete page.")
+            break
+        all_objects.extend(objects)
+        offset += len(objects)
+        if offset >= count:
+            break
+
     return all_objects
 
 
@@ -496,14 +487,12 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
 
     # Step 1a: Snapshot existing jobs BEFORE queuing so we can identify the new one
     existing_ids = set()
-    try:
-        for t in _query_task_list(session):
-            jid = t.get("jobId", "")
-            if jid:
-                existing_ids.add(jid)
-        log.info("Pre-queue snapshot: {} existing job(s).".format(len(existing_ids)))
-    except Exception as e:
-        log.warning("Could not snapshot task list: {}".format(e))
+    for t in _query_task_list(session):
+        jid = t.get("jobId", "")
+        if not jid:
+            raise RuntimeError("Report history contains a job without an ID.")
+        existing_ids.add(jid)
+    log.info("Pre-queue snapshot: {} existing job(s).".format(len(existing_ids)))
 
     # Step 1b: Queue report
     # We must pass at least one email so UrbanPiper creates a visible task entry
@@ -576,13 +565,16 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
     while time.time() < deadline:
         time.sleep(poll_interval)
         tasks = _query_task_list(session)
-        for task in tasks:
-            jid = task.get("jobId", "")
-            if jid in existing_ids:
-                continue   # skip old reports
-            # Since we just queued a new report, the first task not in existing_ids is ours.
-            found_job = task
-            break
+        if found_job is None:
+            candidates = {t["jobId"]: t for t in tasks
+                          if t.get("jobId") and t["jobId"] not in existing_ids}
+            if len(candidates) > 1:
+                raise RuntimeError("Multiple new report jobs appeared; cannot identify ours safely.")
+            found_job = next(iter(candidates.values()), None)
+        else:
+            # Keep following the same job even if another report appears later.
+            selected_id = found_job["jobId"]
+            found_job = next((t for t in tasks if t.get("jobId") == selected_id), found_job)
 
         if not found_job:
             log.info("New report not in task list yet -- waiting...")
@@ -597,7 +589,7 @@ def generate_and_download_csv(session, time_period, poll_interval=15, max_wait=1
         elif status == "failed":
             raise RuntimeError("Atlas report FAILED: {}".format(found_job.get("message")))
 
-        found_job = None   # still pending/processing, keep polling
+        # Still pending/processing: retain this job ID for the next poll.
     else:
         raise TimeoutError("Report did not complete within {} seconds.".format(max_wait))
 

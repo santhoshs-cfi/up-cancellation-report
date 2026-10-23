@@ -150,8 +150,8 @@ def _validate_csv_dates(csv_bytes, mode, time_period):
                 "  Expected : {} → {}\n"
                 "  Got      : {} → {}\n"
                 "  Mode     : {}\n"
-                "  This usually means the API returned a cached/old report.\n"
-                "  Re-run the workflow to retry with a fresh report.".format(
+                "  The downloaded report does not cover the requested period.\n"
+                "  Check report selection and request filters before retrying.".format(
                     expected_start, expected_end, actual_min, actual_max, mode.upper()
                 )
             )
@@ -189,16 +189,16 @@ def run_pipeline(session, mode):
     try:
         _validate_csv_dates(csv_bytes, mode, time_period)
     except ValueError:
-        # UrbanPiper occasionally serves an old cached file for the YESTERDAY
-        # shortcut. Requesting the same day as an explicit range forces a fresh
-        # report. Keep the validation in place so an incorrect file is never sent.
+        # Try an explicit range if the YESTERDAY result has unexpected dates.
+        # A mismatch alone does not establish whether selection, filters, or
+        # server caching caused it. Validate the fallback result as well.
         if mode not in ("daily", "test") or time_period != "YESTERDAY":
             raise
 
         report_day = date.today() - timedelta(days=1)
         fresh_time_period = "{0},{0}".format(report_day.isoformat())
         log.warning(
-            "Cached YESTERDAY report had the wrong date range. Retrying with "
+            "Downloaded YESTERDAY report had the wrong date range. Retrying with "
             "explicit period {}.".format(fresh_time_period)
         )
         delete_session()
